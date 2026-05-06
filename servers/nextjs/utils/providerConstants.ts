@@ -99,6 +99,14 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderOption> = {
     apiKeyField: "OPEN_WEBUI_IMAGE_URL",
     apiKeyFieldLabel: "Open WebUI URL",
   },
+  custom_image: {
+    value: "custom_image",
+    label: "Custom",
+    description: "Any OpenAI-compatible image generation endpoint",
+    requiresApiKey: false,
+    apiKeyField: "CUSTOM_IMAGE_API_KEY",
+    apiKeyFieldLabel: "Custom Image API Key",
+  },
 };
 
 export const LLM_PROVIDERS: Record<string, LLMProviderOption> = {

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import { Button } from '../ui/button';
 import { Check, CheckCircle, ChevronLeft, ChevronRight, ChevronUp, Download, Eye, EyeOff, Loader2 } from 'lucide-react';
@@ -41,6 +41,11 @@ const PresentonMode = ({ currentStep, setStep }: { currentStep: number, setStep:
         status: string;
         done: boolean;
     } | null>(null);
+    const [customImageModels, setCustomImageModels] = useState<string[]>([]);
+    const [customImageModelsChecked, setCustomImageModelsChecked] = useState(false);
+    const [customImageModelsLoading, setCustomImageModelsLoading] = useState(false);
+    const fetchImageGenerationRef = useRef(0);
+    const isManualModelProvider = MANUAL_MODEL_PROVIDERS.has(llmConfig.LLM || "");
 
     const handleProviderChange = (provider: string) => {
 
@@ -199,6 +204,51 @@ const PresentonMode = ({ currentStep, setStep }: { currentStep: number, setStep:
         }
     };
 
+    const fetchCustomImageModels = async () => {
+        if (!llmConfig.CUSTOM_IMAGE_URL) return;
+        const generation = ++fetchImageGenerationRef.current;
+        setCustomImageModels([]);
+        setCustomImageModelsChecked(false);
+        setCustomImageModelsLoading(true);
+        try {
+            const response = await fetch(getApiUrl("/api/v1/ppt/openai/models/available"), {
+                method: "POST",
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: llmConfig.CUSTOM_IMAGE_URL,
+                    api_key: llmConfig.CUSTOM_IMAGE_API_KEY || '',
+                }),
+            });
+            if (fetchImageGenerationRef.current !== generation) return;
+            if (response.ok) {
+                const data = await response.json();
+                const models: string[] = Array.isArray(data) ? data : [];
+                setCustomImageModels(models);
+                setCustomImageModelsChecked(true);
+                if (models.length > 0 && !llmConfig.CUSTOM_IMAGE_MODEL) {
+                    setLlmConfig(prev => ({
+                        ...prev,
+                        CUSTOM_IMAGE_MODEL: models[0]
+                    }));
+                }
+            } else {
+                setCustomImageModels([]);
+                setCustomImageModelsChecked(true);
+                toast.error('Failed to fetch custom image models');
+            }
+        } catch (error) {
+            if (fetchImageGenerationRef.current !== generation) return;
+            console.error('Error fetching custom image models:', error);
+            toast.error('Error fetching custom image models');
+            setCustomImageModels([]);
+            setCustomImageModelsChecked(true);
+        } finally {
+            if (fetchImageGenerationRef.current === generation) {
+                setCustomImageModelsLoading(false);
+            }
+        }
+    };
+
     const renderQualitySelector = (llmConfig: LLMConfig) => {
         if (llmConfig.IMAGE_PROVIDER === "dall-e-3") {
             return (
@@ -312,10 +362,46 @@ const PresentonMode = ({ currentStep, setStep }: { currentStep: number, setStep:
     }, [downloadingModel?.downloaded, downloadingModel?.size]);
 
     useEffect(() => {
+        setLlmConfig(prev => ({
+            ...prev,
+            ...userConfigState.llm_config,
+        }));
+    }, [userConfigState.llm_config]);
+
+    useEffect(() => {
         if (llmConfig.LLM === 'ollama' && !modelsChecked && !modelsLoading) {
             fetchAvailableModels();
         }
     }, [llmConfig.LLM, modelsChecked, modelsLoading]);
+
+    useEffect(() => {
+        if (
+            llmConfig.IMAGE_PROVIDER === 'custom_image' &&
+            llmConfig.CUSTOM_IMAGE_URL &&
+            !customImageModelsChecked &&
+            !customImageModelsLoading
+        ) {
+            void fetchCustomImageModels();
+        }
+    }, [llmConfig.IMAGE_PROVIDER, llmConfig.CUSTOM_IMAGE_URL, customImageModelsChecked, customImageModelsLoading]);
+
+    // Reset models when URL changes; cancel any in-flight fetch
+    useEffect(() => {
+        fetchImageGenerationRef.current++;
+        setCustomImageModels([]);
+        setCustomImageModelsChecked(false);
+        setCustomImageModelsLoading(false);
+    }, [llmConfig.CUSTOM_IMAGE_URL]);
+
+    // Reset when switching away from custom_image; cancel any in-flight fetch
+    useEffect(() => {
+        if (llmConfig.IMAGE_PROVIDER !== 'custom_image') {
+            fetchImageGenerationRef.current++;
+            setCustomImageModels([]);
+            setCustomImageModelsChecked(false);
+            setCustomImageModelsLoading(false);
+        }
+    }, [llmConfig.IMAGE_PROVIDER]);
 
     return (
         <div className='w-full max-w-[640px] font-syne'>
@@ -775,6 +861,121 @@ const PresentonMode = ({ currentStep, setStep }: { currentStep: number, setStep:
 
                                             </div>
 
+                                        </div>
+                                    );
+                                }
+
+                                // Show Custom Image (OpenAI-compatible) configuration
+                                if (provider.value === "custom_image") {
+                                    return (
+                                        <div className="space-y-4 w-full">
+                                            {/* URL Input */}
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                    OpenAI Compatible URL
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Enter your URL"
+                                                    className="w-full px-4 py-2.5 outline-none border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-colors"
+                                                    value={llmConfig.CUSTOM_IMAGE_URL || ""}
+                                                    onChange={(e) => {
+                                                        setLlmConfig(prev => ({
+                                                            ...prev,
+                                                            CUSTOM_IMAGE_URL: e.target.value,
+                                                            CUSTOM_IMAGE_MODEL: '',
+                                                        }));
+                                                    }}
+                                                />
+                                            </div>
+                                            {/* API Key Input */}
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                    API Key (Optional)
+                                                </label>
+                                                <div className="relative">
+                                                    <input
+                                                        type={showApiKey ? 'text' : 'password'}
+                                                        placeholder="Enter your API key (optional)"
+                                                        className="w-full px-4 py-2.5 h-12 outline-none border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-colors"
+                                                        value={llmConfig.CUSTOM_IMAGE_API_KEY || ""}
+                                                        onChange={(e) => {
+                                                            fetchImageGenerationRef.current++;
+                                                            setCustomImageModels([]);
+                                                            setCustomImageModelsChecked(false);
+                                                            setCustomImageModelsLoading(false);
+                                                            setLlmConfig(prev => ({
+                                                                ...prev,
+                                                                CUSTOM_IMAGE_API_KEY: e.target.value,
+                                                            }));
+                                                        }}
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setShowApiKey((prev) => !prev)}
+                                                        className='absolute right-2 top-1/2 -translate-y-1/2 bg-white px-2 py-1 cursor-pointer'
+                                                    >
+                                                        {showApiKey ? <Eye className='w-4 h-4 text-gray-500' /> : <EyeOff className='w-4 h-4 text-gray-500' />}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            {/* Model Name Input (always visible) */}
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                    Model Name
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="e.g. stable-diffusion-xl"
+                                                    className="w-full px-4 py-2.5 outline-none border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-colors"
+                                                    value={llmConfig.CUSTOM_IMAGE_MODEL || ""}
+                                                    onChange={(e) => {
+                                                        setLlmConfig(prev => ({
+                                                            ...prev,
+                                                            CUSTOM_IMAGE_MODEL: e.target.value,
+                                                        }));
+                                                    }}
+                                                />
+                                            </div>
+                                            {/* Fetch Models Button */}
+                                            <div>
+                                                <button
+                                                    type="button"
+                                                    onClick={fetchCustomImageModels}
+                                                    disabled={customImageModelsLoading || !llmConfig.CUSTOM_IMAGE_URL}
+                                                    className="w-full h-10 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:border-blue-500 hover:text-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                                                >
+                                                    {customImageModelsLoading ? (
+                                                        <><Loader2 className="w-4 h-4 animate-spin" /> Fetching Models...</>
+                                                    ) : (
+                                                        'Fetch Available Models'
+                                                    )}
+                                                </button>
+                                            </div>
+                                            {/* Model Selection from fetched list */}
+                                            {customImageModelsChecked && customImageModels.length > 0 && (
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                        Or Select from Available Models
+                                                    </label>
+                                                    <Select
+                                                        value={llmConfig.CUSTOM_IMAGE_MODEL || ''}
+                                                        onValueChange={(value) => setLlmConfig(prev => ({
+                                                            ...prev,
+                                                            CUSTOM_IMAGE_MODEL: value,
+                                                        }))}
+                                                    >
+                                                        <SelectTrigger className="w-full h-12 px-4 py-4 outline-none border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-colors hover:border-gray-400 justify-between">
+                                                            <SelectValue placeholder="Select a model" />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            {customImageModels.map((model) => (
+                                                                <SelectItem key={model} value={model}>{model}</SelectItem>
+                                                            ))}
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                            )}
                                         </div>
                                     );
                                 }

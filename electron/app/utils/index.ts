@@ -50,18 +50,32 @@ export function setupEnv(fastApiPort: number, nextjsPort: number) {
 }
 
 
-export function killProcess(pid: number, signal: NodeJS.Signals = "SIGTERM") {
-  return new Promise((resolve, reject) => {
+export function killProcess(pid: number, signal: NodeJS.Signals = "SIGTERM", timeoutMs: number = 3000): Promise<void> {
+  return new Promise((resolve) => {
     treeKill(pid, signal, (err: any) => {
       if (err) {
-        console.error(`Error killing process ${pid}:`, err)
-        reject(err)
-      } else {
-        console.log(`Process ${pid} killed (${signal})`)
-        resolve(true)
+        console.warn(`SIGTERM failed for PID ${pid}, sending SIGKILL`);
+        treeKill(pid, "SIGKILL", () => resolve());
+        return;
       }
-    })
-  })
+      // Poll to confirm process is dead
+      const start = Date.now();
+      const check = setInterval(() => {
+        try {
+          process.kill(pid, 0); // throws if process doesn't exist
+          if (Date.now() - start > timeoutMs) {
+            clearInterval(check);
+            console.warn(`PID ${pid} still alive after ${timeoutMs}ms, sending SIGKILL`);
+            treeKill(pid, "SIGKILL", () => resolve());
+          }
+        } catch {
+          clearInterval(check);
+          console.log(`PID ${pid} confirmed dead`);
+          resolve();
+        }
+      }, 100);
+    });
+  });
 }
 
 export async function findUnusedPorts(startPort: number = 40000, count: number = 2): Promise<number[]> {
