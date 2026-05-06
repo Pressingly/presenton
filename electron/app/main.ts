@@ -215,6 +215,11 @@ async function startServers(fastApiPort: number, nextjsPort: number) {
         COMFYUI_WORKFLOW: process.env.COMFYUI_WORKFLOW,
         DALL_E_3_QUALITY: process.env.DALL_E_3_QUALITY,
         GPT_IMAGE_1_5_QUALITY: process.env.GPT_IMAGE_1_5_QUALITY,
+        OPEN_WEBUI_IMAGE_URL: process.env.OPEN_WEBUI_IMAGE_URL,
+        OPEN_WEBUI_IMAGE_API_KEY: process.env.OPEN_WEBUI_IMAGE_API_KEY,
+        CUSTOM_IMAGE_URL: process.env.CUSTOM_IMAGE_URL,
+        CUSTOM_IMAGE_API_KEY: process.env.CUSTOM_IMAGE_API_KEY,
+        CUSTOM_IMAGE_MODEL: process.env.CUSTOM_IMAGE_MODEL,
         APP_DATA_DIRECTORY: appDataDir,
         FASTAPI_PUBLIC_URL: process.env.NEXT_PUBLIC_FAST_API,
         TEMP_DIRECTORY: tempDir,
@@ -388,6 +393,11 @@ app.whenReady().then(async () => {
     COMFYUI_WORKFLOW: process.env.COMFYUI_WORKFLOW,
     DALL_E_3_QUALITY: process.env.DALL_E_3_QUALITY,
     GPT_IMAGE_1_5_QUALITY: process.env.GPT_IMAGE_1_5_QUALITY,
+    OPEN_WEBUI_IMAGE_URL: process.env.OPEN_WEBUI_IMAGE_URL,
+    OPEN_WEBUI_IMAGE_API_KEY: process.env.OPEN_WEBUI_IMAGE_API_KEY,
+    CUSTOM_IMAGE_URL: process.env.CUSTOM_IMAGE_URL,
+    CUSTOM_IMAGE_API_KEY: process.env.CUSTOM_IMAGE_API_KEY,
+    CUSTOM_IMAGE_MODEL: process.env.CUSTOM_IMAGE_MODEL,
   })
 
   const [fastApiPort, nextjsPort] = await findUnusedPorts();
@@ -420,5 +430,13 @@ app.on("before-quit", async (event) => {
 app.on("will-quit", async (event) => {
   if (isStopping) return;
   event.preventDefault();
+  await forceQuitApp(0);
+});
+
+process.on("SIGINT", async () => {
+  await forceQuitApp(0);
+});
+
+process.on("SIGTERM", async () => {
   await forceQuitApp(0);
 });

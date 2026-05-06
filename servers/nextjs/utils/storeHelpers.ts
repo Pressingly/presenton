@@ -136,6 +136,14 @@ export const getLLMConfigValidationError = (
           return "Open WebUI URL is required.";
         }
         break;
+      case "custom_image":
+        if (!isProvided(llmConfig.CUSTOM_IMAGE_URL)) {
+          return "Custom image URL is required.";
+        }
+        if (!isProvided(llmConfig.CUSTOM_IMAGE_MODEL)) {
+          return "Select a model for your custom image provider. Fetch available models after entering the URL.";
+        }
+        break;
       default:
         return "Select a valid image provider.";
     }
