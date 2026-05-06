@@ -15,6 +15,9 @@ from utils.get_env import (
     get_pexels_api_key_env,
     get_open_webui_image_url_env,
     get_open_webui_image_api_key_env,
+    get_custom_image_url_env,
+    get_custom_image_api_key_env,
+    get_custom_image_model_env,
 )
 from utils.get_env import get_pixabay_api_key_env
 from utils.get_env import get_comfyui_url_env
@@ -29,6 +32,7 @@ from utils.image_provider import (
     is_dalle3_selected,
     is_comfyui_selected,
     is_open_webui_selected,
+    is_custom_image_selected,
 )
 import uuid
 
@@ -59,6 +63,8 @@ class ImageGenerationService:
             return self.generate_image_comfyui
         elif is_open_webui_selected():
             return self.generate_image_open_webui
+        elif is_custom_image_selected():
+            return self.generate_image_custom
         return None
 
     def is_stock_provider_selected(self):
@@ -230,6 +236,55 @@ class ImageGenerationService:
                     f.write(await dl_resp.read())
             else:
                 raise Exception("Open WebUI returned no image data")
+
+        return image_path
+
+    async def generate_image_custom(
+        self, prompt: str, output_directory: str
+    ) -> str:
+        """
+        Generate an image using a custom OpenAI-compatible image generation endpoint.
+
+        Requires:
+        - CUSTOM_IMAGE_URL: Base URL of the OpenAI-compatible API (e.g. https://api.example.com/v1)
+        - CUSTOM_IMAGE_MODEL: Model name to use
+        - CUSTOM_IMAGE_API_KEY: Optional API key
+        """
+        base_url = get_custom_image_url_env()
+        if not base_url:
+            raise ValueError("CUSTOM_IMAGE_URL environment variable is not set")
+
+        model = get_custom_image_model_env()
+        if not model:
+            raise ValueError("CUSTOM_IMAGE_MODEL environment variable is not set")
+
+        api_key = get_custom_image_api_key_env() or "not-needed"
+
+        client = AsyncOpenAI(base_url=base_url.rstrip("/"), api_key=api_key)
+        result = await client.images.generate(
+            model=model,
+            prompt=prompt,
+            n=1,
+        )
+
+        image_path = os.path.join(output_directory, f"{uuid.uuid4()}.png")
+
+        item = result.data[0]
+        if item.b64_json:
+            with open(image_path, "wb") as f:
+                f.write(base64.b64decode(item.b64_json))
+        elif item.url:
+            async with aiohttp.ClientSession(trust_env=True) as session:
+                resp = await session.get(
+                    item.url,
+                    timeout=aiohttp.ClientTimeout(total=120),
+                )
+                if resp.status != 200:
+                    raise Exception(f"Failed to download custom image: {resp.status}")
+                with open(image_path, "wb") as f:
+                    f.write(await resp.read())
+        else:
+            raise Exception("Custom image provider returned no image data")
 
         return image_path
 

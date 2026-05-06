@@ -17,7 +17,7 @@ from services.icon_finder_service import ICON_FINDER_SERVICE
 from services.image_generation_service import ImageGenerationService
 from services.mem0_presentation_memory_service import MEM0_PRESENTATION_MEMORY_SERVICE
 from templates.presentation_layout import SlideLayoutModel
-from utils.asset_directory_utils import get_images_directory
+from utils.asset_directory_utils import filesystem_path_to_app_data_url, get_images_directory
 from utils.process_slides import (
     process_old_and_new_slides_and_fetch_assets,
     process_slide_and_fetch_assets,
@@ -220,7 +220,7 @@ class PresentationChatMemoryLayer:
         if isinstance(image, ImageAsset):
             self._sql_session.add(image)
             await self._sql_session.commit()
-            return image.path
+            return filesystem_path_to_app_data_url(image.path)
 
         return str(image)
 

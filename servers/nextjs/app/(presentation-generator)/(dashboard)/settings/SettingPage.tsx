@@ -49,6 +49,17 @@ const SettingsPage = () => {
   const [llmConfig, setLlmConfig] = useState<LLMConfig>(
     userConfigState.llm_config
   );
+
+  // Sync local state when Redux store is updated (e.g. after async config fetch on load).
+  // Merge rather than replace so Redux initialState defaults (IMAGE_PROVIDER, LLM) are
+  // preserved when the API response doesn't include those keys.
+  useEffect(() => {
+    setLlmConfig(prev => ({
+      ...prev,
+      ...userConfigState.llm_config,
+    }));
+  }, [userConfigState.llm_config]);
+
   const canChangeKeys = userConfigState.can_change_keys;
   const [buttonState, setButtonState] = useState<ButtonState>({
     isLoading: false,

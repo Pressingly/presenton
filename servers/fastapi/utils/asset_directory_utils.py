@@ -70,6 +70,27 @@ def resolve_image_path_to_filesystem(path_or_url: str) -> Optional[str]:
     return resolve_app_path_to_filesystem(path_or_url)
 
 
+def filesystem_path_to_app_data_url(path: str) -> str:
+    """
+    Convert an absolute filesystem path inside APP_DATA_DIRECTORY to a
+    FastAPI-mounted /app_data/... URL so the frontend can resolve it correctly
+    on any OS (macOS paths like /Users/.../Library/... would otherwise break).
+    Returns the path unchanged if it doesn't fall under APP_DATA_DIRECTORY or
+    is already a URL/relative path.
+    """
+    if not path or path.startswith("/app_data/") or path.startswith("/static/") or path.startswith("http"):
+        return path
+    app_data_dir = get_app_data_directory_env()
+    if app_data_dir:
+        normalized_app_data = app_data_dir.rstrip("/\\")
+        normalized_path = path.replace("\\", "/")
+        normalized_base = normalized_app_data.replace("\\", "/")
+        if normalized_path.startswith(normalized_base + "/"):
+            relative = normalized_path[len(normalized_base) + 1:]
+            return f"/app_data/{relative}"
+    return path
+
+
 def get_images_directory():
     images_directory = os.path.join(get_app_data_directory_env(), "images")
     os.makedirs(images_directory, exist_ok=True)

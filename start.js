@@ -261,6 +261,16 @@ const setupUserConfigFromEnv = () => {
     CODEX_REFRESH_TOKEN: existingConfig.CODEX_REFRESH_TOKEN,
     CODEX_TOKEN_EXPIRES: existingConfig.CODEX_TOKEN_EXPIRES,
     CODEX_ACCOUNT_ID: existingConfig.CODEX_ACCOUNT_ID,
+    OPEN_WEBUI_IMAGE_URL:
+      process.env.OPEN_WEBUI_IMAGE_URL || existingConfig.OPEN_WEBUI_IMAGE_URL,
+    OPEN_WEBUI_IMAGE_API_KEY:
+      process.env.OPEN_WEBUI_IMAGE_API_KEY || existingConfig.OPEN_WEBUI_IMAGE_API_KEY,
+    CUSTOM_IMAGE_URL:
+      process.env.CUSTOM_IMAGE_URL || existingConfig.CUSTOM_IMAGE_URL,
+    CUSTOM_IMAGE_API_KEY:
+      process.env.CUSTOM_IMAGE_API_KEY || existingConfig.CUSTOM_IMAGE_API_KEY,
+    CUSTOM_IMAGE_MODEL:
+      process.env.CUSTOM_IMAGE_MODEL || existingConfig.CUSTOM_IMAGE_MODEL,
     AUTH_USERNAME: existingConfig.AUTH_USERNAME,
     AUTH_PASSWORD_HASH: existingConfig.AUTH_PASSWORD_HASH,
     AUTH_SECRET_KEY: existingConfig.AUTH_SECRET_KEY,
