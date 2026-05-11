@@ -78,6 +78,7 @@ const config = {
     target: ["dmg"],
     category: "public.app-category.productivity",
     icon: "resources/ui/assets/images/presenton_short_filled.png",
+    identity: null,
   },
   linux: {
     artifactName: "Presenton-${version}.${ext}",
@@ -89,7 +90,7 @@ const config = {
     recommends: ["libreoffice"],
   },
   win: {
-    target: ["nsis", "appx"],
+    target: ["nsis"],
     icon: "build/icon.ico",
     artifactName: "Presenton-${version}.${ext}",
     executableName: "Presenton",

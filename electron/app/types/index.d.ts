@@ -27,11 +27,17 @@ interface FastApiEnv {
   COMFYUI_WORKFLOW?: string,
   DALL_E_3_QUALITY?: string,
   GPT_IMAGE_1_5_QUALITY?: string,
+  OPEN_WEBUI_IMAGE_URL?: string,
+  OPEN_WEBUI_IMAGE_API_KEY?: string,
+  CUSTOM_IMAGE_URL?: string,
+  CUSTOM_IMAGE_API_KEY?: string,
+  CUSTOM_IMAGE_MODEL?: string,
   APP_DATA_DIRECTORY?: string,
   FASTAPI_PUBLIC_URL?: string,
   TEMP_DIRECTORY?: string,
   USER_CONFIG_PATH?: string,
   MIGRATE_DATABASE_ON_STARTUP?: string,
+  DISABLE_AUTH?: string,
   /** Absolute path to the resolved LibreOffice executable discovered at startup. */
   SOFFICE_PATH?: string,
   /** Absolute path to the ImageMagick binary resolved at startup by imagemagick-check.ts. */
@@ -42,15 +48,27 @@ interface FastApiEnv {
   LITEPARSE_NODE_BINARY?: string,
   /** Set to "1" when using the Electron binary as a Node runtime. */
   ELECTRON_RUN_AS_NODE?: string,
+  /** Root directory of the bundled presentation export runtime package. */
+  EXPORT_PACKAGE_ROOT?: string,
+  /** Directory used by FastAPI export task runtime resolution. */
+  EXPORT_RUNTIME_DIR?: string,
+  /** Absolute path to bundled PyInstaller converter binary for export runtime. */
+  BUILT_PYTHON_MODULE_PATH?: string,
 }
 
 interface NextJsEnv {
   NEXT_PUBLIC_FAST_API?: string,
+  FAST_API_INTERNAL_URL?: string,
   TEMP_DIRECTORY?: string,
   NEXT_PUBLIC_URL?: string,
   NEXT_PUBLIC_USER_CONFIG_PATH?: string,
   USER_CONFIG_PATH?: string,
   APP_DATA_DIRECTORY?: string,
+  DISABLE_AUTH?: string,
+  EXPORT_PACKAGE_ROOT?: string,
+  PRESENTON_APP_ROOT?: string,
+  BUILT_PYTHON_MODULE_PATH?: string,
+  PUPPETEER_EXECUTABLE_PATH?: string,
 }
 
 interface UserConfig {
@@ -81,6 +99,11 @@ interface UserConfig {
   COMFYUI_WORKFLOW?: string,
   DALL_E_3_QUALITY?: string,
   GPT_IMAGE_1_5_QUALITY?: string,
+  OPEN_WEBUI_IMAGE_URL?: string,
+  OPEN_WEBUI_IMAGE_API_KEY?: string,
+  CUSTOM_IMAGE_URL?: string,
+  CUSTOM_IMAGE_API_KEY?: string,
+  CUSTOM_IMAGE_MODEL?: string,
   CODEX_MODEL?: string,
   CODEX_ACCESS_TOKEN?: string,
   CODEX_REFRESH_TOKEN?: string,

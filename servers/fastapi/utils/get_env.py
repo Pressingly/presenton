@@ -151,3 +151,17 @@ def get_open_webui_image_url_env():
 
 def get_open_webui_image_api_key_env():
     return os.getenv("OPEN_WEBUI_IMAGE_API_KEY")
+
+
+# Custom Image Provider (OpenAI-compatible)
+def get_custom_image_url_env():
+    return os.getenv("CUSTOM_IMAGE_URL")
+
+
+def get_custom_image_api_key_env():
+    return os.getenv("CUSTOM_IMAGE_API_KEY")
+
+
+def get_custom_image_model_env():
+    return os.getenv("CUSTOM_IMAGE_MODEL")
+

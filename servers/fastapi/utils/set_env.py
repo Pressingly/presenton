@@ -133,3 +133,17 @@ def set_open_webui_image_url_env(value: str):
 
 def set_open_webui_image_api_key_env(value: str):
     os.environ["OPEN_WEBUI_IMAGE_API_KEY"] = value
+
+
+# Custom Image Provider (OpenAI-compatible)
+def set_custom_image_url_env(value: str):
+    os.environ["CUSTOM_IMAGE_URL"] = value
+
+
+def set_custom_image_api_key_env(value: str):
+    os.environ["CUSTOM_IMAGE_API_KEY"] = value
+
+
+def set_custom_image_model_env(value: str):
+    os.environ["CUSTOM_IMAGE_MODEL"] = value
+

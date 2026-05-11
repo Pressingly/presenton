@@ -38,6 +38,13 @@ services:
       - COMFYUI_WORKFLOW=${COMFYUI_WORKFLOW}
       - OPEN_WEBUI_IMAGE_URL=${OPEN_WEBUI_IMAGE_URL}
       - OPEN_WEBUI_IMAGE_API_KEY=${OPEN_WEBUI_IMAGE_API_KEY}
+      - CUSTOM_IMAGE_URL=${CUSTOM_IMAGE_URL}
+      - CUSTOM_IMAGE_API_KEY=${CUSTOM_IMAGE_API_KEY}
+      - CUSTOM_IMAGE_MODEL=${CUSTOM_IMAGE_MODEL}
+      - AUTH_USERNAME=${AUTH_USERNAME:-}
+      - AUTH_PASSWORD=${AUTH_PASSWORD:-}
+      - AUTH_OVERRIDE_FROM_ENV=${AUTH_OVERRIDE_FROM_ENV:-}
+      - RESET_AUTH=${RESET_AUTH:-}
 
   production-gpu:
     # image: ghcr.io/presenton/presenton:latest
@@ -85,6 +92,13 @@ services:
       - COMFYUI_WORKFLOW=${COMFYUI_WORKFLOW}
       - OPEN_WEBUI_IMAGE_URL=${OPEN_WEBUI_IMAGE_URL}
       - OPEN_WEBUI_IMAGE_API_KEY=${OPEN_WEBUI_IMAGE_API_KEY}
+      - CUSTOM_IMAGE_URL=${CUSTOM_IMAGE_URL}
+      - CUSTOM_IMAGE_API_KEY=${CUSTOM_IMAGE_API_KEY}
+      - CUSTOM_IMAGE_MODEL=${CUSTOM_IMAGE_MODEL}
+      - AUTH_USERNAME=${AUTH_USERNAME:-}
+      - AUTH_PASSWORD=${AUTH_PASSWORD:-}
+      - AUTH_OVERRIDE_FROM_ENV=${AUTH_OVERRIDE_FROM_ENV:-}
+      - RESET_AUTH=${RESET_AUTH:-}
 
   development:
     build:
@@ -97,6 +111,7 @@ services:
     volumes:
       - .:/app
       - ./app_data:/app_data
+      - /app/servers/nextjs/node_modules
     environment:
       - MIGRATE_DATABASE_ON_STARTUP=true
       - CAN_CHANGE_KEYS=${CAN_CHANGE_KEYS}
@@ -124,6 +139,13 @@ services:
       - COMFYUI_WORKFLOW=${COMFYUI_WORKFLOW}
       - OPEN_WEBUI_IMAGE_URL=${OPEN_WEBUI_IMAGE_URL}
       - OPEN_WEBUI_IMAGE_API_KEY=${OPEN_WEBUI_IMAGE_API_KEY}
+      - CUSTOM_IMAGE_URL=${CUSTOM_IMAGE_URL}
+      - CUSTOM_IMAGE_API_KEY=${CUSTOM_IMAGE_API_KEY}
+      - CUSTOM_IMAGE_MODEL=${CUSTOM_IMAGE_MODEL}
+      - AUTH_USERNAME=${AUTH_USERNAME:-}
+      - AUTH_PASSWORD=${AUTH_PASSWORD:-}
+      - AUTH_OVERRIDE_FROM_ENV=${AUTH_OVERRIDE_FROM_ENV:-}
+      - RESET_AUTH=${RESET_AUTH:-}
 
   development-gpu:
     build:
@@ -143,6 +165,7 @@ services:
     volumes:
       - .:/app
       - ./app_data:/app_data
+      - /app/servers/nextjs/node_modules
     environment:
       - MIGRATE_DATABASE_ON_STARTUP=true
       - CAN_CHANGE_KEYS=${CAN_CHANGE_KEYS}
@@ -170,3 +193,14 @@ services:
       - COMFYUI_WORKFLOW=${COMFYUI_WORKFLOW}
       - OPEN_WEBUI_IMAGE_URL=${OPEN_WEBUI_IMAGE_URL}
       - OPEN_WEBUI_IMAGE_API_KEY=${OPEN_WEBUI_IMAGE_API_KEY}
+      - CUSTOM_IMAGE_URL=${CUSTOM_IMAGE_URL}
+      - CUSTOM_IMAGE_API_KEY=${CUSTOM_IMAGE_API_KEY}
+      - CUSTOM_IMAGE_MODEL=${CUSTOM_IMAGE_MODEL}
+      - AUTH_USERNAME=${AUTH_USERNAME:-}
+      - AUTH_PASSWORD=${AUTH_PASSWORD:-}
+      - AUTH_OVERRIDE_FROM_ENV=${AUTH_OVERRIDE_FROM_ENV:-}
+      - RESET_AUTH=${RESET_AUTH:-}
+
+volumes:
+  presenton_root_node_modules:
+  presenton_document_extraction_liteparse:
