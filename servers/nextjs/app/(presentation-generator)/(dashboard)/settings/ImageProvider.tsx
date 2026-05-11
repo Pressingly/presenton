@@ -7,7 +7,6 @@ import { notify } from '@/components/ui/sonner'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { LLMConfig } from '@/types/llm_config'
-import { getApiUrl } from '@/utils/api'
 import { DALLE_3_QUALITY_OPTIONS, GPT_IMAGE_1_5_QUALITY_OPTIONS, IMAGE_PROVIDERS } from '@/utils/providerConstants'
 import { Check, ChevronUp, Eye, EyeOff, Loader2 } from 'lucide-react'
 import React, { useEffect, useRef, useState } from 'react'
@@ -56,7 +55,7 @@ const ImageProvider = ({ llmConfig, setLlmConfig }: { llmConfig: LLMConfig, setL
         setCustomImageModelsChecked(false);
         setCustomImageModelsLoading(true);
         try {
-            const response = await fetch(getApiUrl('/api/v1/ppt/openai/models/available'), {
+            const response = await fetch('/api/v1/ppt/openai/models/available', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
