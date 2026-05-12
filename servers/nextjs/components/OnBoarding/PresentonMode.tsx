@@ -106,6 +106,9 @@ const PresentonMode = ({ currentStep, setStep }: { currentStep: number, setStep:
     const currentOllamaUrl = llmConfig.OLLAMA_URL || '';
     const useCustomOllamaUrl = !!llmConfig.USE_CUSTOM_URL;
 
+    const getFastApiBase = () =>
+        (typeof window !== 'undefined' && (window as any).env?.NEXT_PUBLIC_FAST_API) || '';
+
     const fetchAvailableModels = async () => {
         if (llmConfig.LLM === 'openai' && !currentApiKey) return;
         if (llmConfig.LLM === 'google' && !currentApiKey) return;
@@ -116,7 +119,7 @@ const PresentonMode = ({ currentStep, setStep }: { currentStep: number, setStep:
         try {
             let response: Response;
             if (llmConfig.LLM === 'google') {
-                response = await fetch('/api/v1/ppt/google/models/available', {
+                response = await fetch(`${getFastApiBase()}/api/v1/ppt/google/models/available`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -126,7 +129,7 @@ const PresentonMode = ({ currentStep, setStep }: { currentStep: number, setStep:
                     }),
                 });
             } else if (llmConfig.LLM === 'anthropic') {
-                response = await fetch('/api/v1/ppt/anthropic/models/available', {
+                response = await fetch(`${getFastApiBase()}/api/v1/ppt/anthropic/models/available`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -136,9 +139,9 @@ const PresentonMode = ({ currentStep, setStep }: { currentStep: number, setStep:
                     }),
                 });
             } else if (llmConfig.LLM === 'ollama') {
-                response = await fetch('/api/v1/ppt/ollama/models/supported');
+                response = await fetch(`${getFastApiBase()}/api/v1/ppt/ollama/models/supported`);
             } else {
-                response = await fetch('/api/v1/ppt/openai/models/available', {
+                response = await fetch(`${getFastApiBase()}/api/v1/ppt/openai/models/available`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -210,7 +213,7 @@ const PresentonMode = ({ currentStep, setStep }: { currentStep: number, setStep:
         setCustomImageModelsChecked(false);
         setCustomImageModelsLoading(true);
         try {
-            const response = await fetch("/api/v1/ppt/openai/models/available", {
+            const response = await fetch(`${getFastApiBase()}/api/v1/ppt/openai/models/available`, {
                 method: "POST",
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

@@ -147,3 +147,17 @@ def set_custom_image_api_key_env(value: str):
 def set_custom_image_model_env(value: str):
     os.environ["CUSTOM_IMAGE_MODEL"] = value
 
+
+# Codex user profile
+def set_codex_email_env(value: str):
+    os.environ["CODEX_EMAIL"] = value
+
+
+def set_codex_username_env(value: str):
+    os.environ["CODEX_USERNAME"] = value
+
+
+def set_codex_is_pro_env(value: str):
+    os.environ["CODEX_IS_PRO"] = value
+
+

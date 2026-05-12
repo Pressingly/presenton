@@ -9,6 +9,21 @@ export interface LLMConfig {
   GOOGLE_API_KEY?: string;
   GOOGLE_MODEL?: string;
 
+  // Google Vertex AI
+  VERTEX_API_KEY?: string;
+  VERTEX_MODEL?: string;
+  VERTEX_PROJECT?: string;
+  VERTEX_LOCATION?: string;
+  VERTEX_BASE_URL?: string;
+
+  // Azure OpenAI
+  AZURE_OPENAI_API_KEY?: string;
+  AZURE_OPENAI_MODEL?: string;
+  AZURE_OPENAI_ENDPOINT?: string;
+  AZURE_OPENAI_BASE_URL?: string;
+  AZURE_OPENAI_API_VERSION?: string;
+  AZURE_OPENAI_DEPLOYMENT?: string;
+
   // Anthropic
   ANTHROPIC_API_KEY?: string;
   ANTHROPIC_MODEL?: string;
@@ -32,6 +47,15 @@ export interface LLMConfig {
   COMFYUI_URL?: string;
   COMFYUI_WORKFLOW?: string;
 
+  // Open WebUI Image Provider
+  OPEN_WEBUI_IMAGE_URL?: string;
+  OPEN_WEBUI_IMAGE_API_KEY?: string;
+
+  // Custom Image Provider (OpenAI-compatible)
+  CUSTOM_IMAGE_URL?: string;
+  CUSTOM_IMAGE_API_KEY?: string;
+  CUSTOM_IMAGE_MODEL?: string;
+
   // Dalle 3 Quality
   DALL_E_3_QUALITY?: string;
   // GPT Image 1.5 Quality
@@ -42,6 +66,7 @@ export interface LLMConfig {
   DISABLE_THINKING?: boolean;
   EXTENDED_REASONING?: boolean;
   WEB_GROUNDING?: boolean;
+  DISABLE_ANONYMOUS_TRACKING?: boolean;
 
   // Codex OAuth (ChatGPT)
   CODEX_MODEL?: string;
@@ -49,9 +74,6 @@ export interface LLMConfig {
   CODEX_REFRESH_TOKEN?: string;
   CODEX_TOKEN_EXPIRES?: string;
   CODEX_ACCOUNT_ID?: string;
-  CODEX_USERNAME?: string;
-  CODEX_EMAIL?: string;
-  CODEX_IS_PRO?: boolean;
 
   // Only used in UI settings
   USE_CUSTOM_URL?: boolean;

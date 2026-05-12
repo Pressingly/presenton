@@ -36,6 +36,15 @@ class UserConfig(BaseModel):
     COMFYUI_URL: Optional[str] = None
     COMFYUI_WORKFLOW: Optional[str] = None
 
+    # Open WebUI Image Provider
+    OPEN_WEBUI_IMAGE_URL: Optional[str] = None
+    OPEN_WEBUI_IMAGE_API_KEY: Optional[str] = None
+
+    # Custom Image Provider (OpenAI-compatible)
+    CUSTOM_IMAGE_URL: Optional[str] = None
+    CUSTOM_IMAGE_API_KEY: Optional[str] = None
+    CUSTOM_IMAGE_MODEL: Optional[str] = None
+
     # Dalle 3 Quality
     DALL_E_3_QUALITY: Optional[str] = None
     # Gpt Image 1.5 Quality
@@ -55,6 +64,3 @@ class UserConfig(BaseModel):
     CODEX_REFRESH_TOKEN: Optional[str] = None
     CODEX_TOKEN_EXPIRES: Optional[str] = None
     CODEX_ACCOUNT_ID: Optional[str] = None
-    CODEX_USERNAME: Optional[str] = None
-    CODEX_EMAIL: Optional[str] = None
-    CODEX_IS_PRO: Optional[bool] = None

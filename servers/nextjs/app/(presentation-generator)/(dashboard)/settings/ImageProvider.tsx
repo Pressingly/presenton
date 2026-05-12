@@ -48,6 +48,9 @@ const ImageProvider = ({ llmConfig, setLlmConfig }: { llmConfig: LLMConfig, setL
         }));
     };
 
+    const getFastApiBase = () =>
+        (typeof window !== 'undefined' && (window as any).env?.NEXT_PUBLIC_FAST_API) || '';
+
     const fetchCustomImageModels = async () => {
         if (!llmConfig.CUSTOM_IMAGE_URL) return;
         const generation = ++fetchGenerationRef.current;
@@ -55,7 +58,7 @@ const ImageProvider = ({ llmConfig, setLlmConfig }: { llmConfig: LLMConfig, setL
         setCustomImageModelsChecked(false);
         setCustomImageModelsLoading(true);
         try {
-            const response = await fetch('/api/v1/ppt/openai/models/available', {
+            const response = await fetch(`${getFastApiBase()}/api/v1/ppt/openai/models/available`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
