@@ -5,6 +5,56 @@ import { LLMConfig } from "@/types/llm_config";
 const userConfigPath = process.env.USER_CONFIG_PATH!;
 const canChangeKeys = process.env.CAN_CHANGE_KEYS !== "false";
 
+const AUTH_FIELDS = new Set([
+  "AUTH_USERNAME",
+  "AUTH_PASSWORD_HASH",
+  "AUTH_SECRET_KEY",
+]);
+
+const ENV_CONFIG_KEYS: Array<keyof LLMConfig> = [
+  "LLM",
+  "OPENAI_API_KEY", "OPENAI_MODEL",
+  "GOOGLE_API_KEY", "GOOGLE_MODEL",
+  "VERTEX_API_KEY", "VERTEX_MODEL", "VERTEX_PROJECT", "VERTEX_LOCATION", "VERTEX_BASE_URL",
+  "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_MODEL", "AZURE_OPENAI_ENDPOINT",
+  "AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_DEPLOYMENT",
+  "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL",
+  "OLLAMA_URL", "OLLAMA_MODEL",
+  "CUSTOM_LLM_URL", "CUSTOM_LLM_API_KEY", "CUSTOM_MODEL",
+  "IMAGE_PROVIDER", "PEXELS_API_KEY", "PIXABAY_API_KEY",
+  "COMFYUI_URL", "COMFYUI_WORKFLOW",
+  "OPEN_WEBUI_IMAGE_URL", "OPEN_WEBUI_IMAGE_API_KEY",
+  "CUSTOM_IMAGE_URL", "CUSTOM_IMAGE_API_KEY", "CUSTOM_IMAGE_MODEL",
+  "DALL_E_3_QUALITY", "GPT_IMAGE_1_5_QUALITY",
+  "DISABLE_IMAGE_GENERATION", "DISABLE_THINKING", "EXTENDED_REASONING", "WEB_GROUNDING",
+  "DISABLE_ANONYMOUS_TRACKING",
+];
+
+function buildConfigFromEnv(): LLMConfig {
+  const config: Record<string, unknown> = {};
+  for (const key of ENV_CONFIG_KEYS) {
+    const value = process.env[key];
+    if (value !== undefined && value !== "") {
+      config[key] = value;
+    }
+  }
+  return config as LLMConfig;
+}
+
+function stripAuthFields(config: Record<string, unknown>) {
+  const sanitized = { ...config };
+  for (const key of AUTH_FIELDS) {
+    delete sanitized[key];
+  }
+  return sanitized;
+}
+
+function stripAuthFieldsFromIncoming(config: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(config).filter(([key]) => !AUTH_FIELDS.has(key))
+  );
+}
+
 export async function GET() {
   if (!canChangeKeys) {
     return NextResponse.json({
@@ -12,18 +62,22 @@ export async function GET() {
       status: 403,
     });
   }
-  if (!userConfigPath) {
-    return NextResponse.json({
-      error: "User config path not found",
-      status: 500,
-    });
+
+  const envConfig = buildConfigFromEnv();
+
+  let fileConfig: LLMConfig = {};
+  if (userConfigPath && fs.existsSync(userConfigPath)) {
+    try {
+      const configData = fs.readFileSync(userConfigPath, "utf-8");
+      fileConfig = JSON.parse(configData) as LLMConfig;
+    } catch {
+      // corrupted file — fall back to env only
+    }
   }
 
-  if (!fs.existsSync(userConfigPath)) {
-    return NextResponse.json({});
-  }
-  const configData = fs.readFileSync(userConfigPath, "utf-8");
-  return NextResponse.json(JSON.parse(configData));
+  // env is the base; file values override (preserves user-saved form values)
+  const merged = stripAuthFields({ ...envConfig, ...fileConfig } as Record<string, unknown>);
+  return NextResponse.json(merged);
 }
 
 export async function POST(request: Request) {
@@ -36,28 +90,85 @@ export async function POST(request: Request) {
   const userConfig = await request.json();
 
   let existingConfig: LLMConfig = {};
-  if (fs.existsSync(userConfigPath)) {
-    const configData = fs.readFileSync(userConfigPath, "utf-8");
-    existingConfig = JSON.parse(configData);
+  if (userConfigPath && fs.existsSync(userConfigPath)) {
+    try {
+      const configData = fs.readFileSync(userConfigPath, "utf-8");
+      existingConfig = JSON.parse(configData);
+    } catch {
+      // corrupted file — merge with empty base
+    }
   }
-  const definedIncomingEntries = Object.entries(userConfig).filter(
-    ([, value]) => value !== undefined
-  );
   const mergedConfig: LLMConfig = {
-    ...existingConfig,
-    ...Object.fromEntries(definedIncomingEntries),
-    CODEX_ACCESS_TOKEN: existingConfig.CODEX_ACCESS_TOKEN,
-    CODEX_REFRESH_TOKEN: existingConfig.CODEX_REFRESH_TOKEN,
-    CODEX_TOKEN_EXPIRES: existingConfig.CODEX_TOKEN_EXPIRES,
-    CODEX_ACCOUNT_ID: existingConfig.CODEX_ACCOUNT_ID,
-    CODEX_USERNAME: existingConfig.CODEX_USERNAME,
-    CODEX_EMAIL: existingConfig.CODEX_EMAIL,
-    CODEX_IS_PRO: existingConfig.CODEX_IS_PRO,
+    LLM: userConfig.LLM || existingConfig.LLM,
+    OPENAI_API_KEY: userConfig.OPENAI_API_KEY || existingConfig.OPENAI_API_KEY,
+    OPENAI_MODEL: userConfig.OPENAI_MODEL || existingConfig.OPENAI_MODEL,
+    GOOGLE_API_KEY: userConfig.GOOGLE_API_KEY || existingConfig.GOOGLE_API_KEY,
+    GOOGLE_MODEL: userConfig.GOOGLE_MODEL || existingConfig.GOOGLE_MODEL,
+    ANTHROPIC_API_KEY:
+      userConfig.ANTHROPIC_API_KEY || existingConfig.ANTHROPIC_API_KEY,
+    ANTHROPIC_MODEL:
+      userConfig.ANTHROPIC_MODEL || existingConfig.ANTHROPIC_MODEL,
+    OLLAMA_URL: userConfig.OLLAMA_URL || existingConfig.OLLAMA_URL,
+    OLLAMA_MODEL: userConfig.OLLAMA_MODEL || existingConfig.OLLAMA_MODEL,
+    CUSTOM_LLM_URL: userConfig.CUSTOM_LLM_URL || existingConfig.CUSTOM_LLM_URL,
+    CUSTOM_LLM_API_KEY:
+      userConfig.CUSTOM_LLM_API_KEY || existingConfig.CUSTOM_LLM_API_KEY,
+    CUSTOM_MODEL: userConfig.CUSTOM_MODEL || existingConfig.CUSTOM_MODEL,
+    DISABLE_IMAGE_GENERATION:
+      userConfig.DISABLE_IMAGE_GENERATION === undefined
+        ? existingConfig.DISABLE_IMAGE_GENERATION
+        : userConfig.DISABLE_IMAGE_GENERATION,
+    PIXABAY_API_KEY:
+      userConfig.PIXABAY_API_KEY || existingConfig.PIXABAY_API_KEY,
+    IMAGE_PROVIDER: userConfig.IMAGE_PROVIDER || existingConfig.IMAGE_PROVIDER,
+    PEXELS_API_KEY: userConfig.PEXELS_API_KEY || existingConfig.PEXELS_API_KEY,
+    COMFYUI_URL: userConfig.COMFYUI_URL || existingConfig.COMFYUI_URL,
+    COMFYUI_WORKFLOW:
+      userConfig.COMFYUI_WORKFLOW || existingConfig.COMFYUI_WORKFLOW,
+    DALL_E_3_QUALITY:
+      userConfig.DALL_E_3_QUALITY || existingConfig.DALL_E_3_QUALITY,
+    GPT_IMAGE_1_5_QUALITY:
+      userConfig.GPT_IMAGE_1_5_QUALITY || existingConfig.GPT_IMAGE_1_5_QUALITY,
+    TOOL_CALLS:
+      userConfig.TOOL_CALLS === undefined
+        ? existingConfig.TOOL_CALLS
+        : userConfig.TOOL_CALLS,
+    DISABLE_THINKING:
+      userConfig.DISABLE_THINKING === undefined
+        ? existingConfig.DISABLE_THINKING
+        : userConfig.DISABLE_THINKING,
+    EXTENDED_REASONING:
+      userConfig.EXTENDED_REASONING === undefined
+        ? existingConfig.EXTENDED_REASONING
+        : userConfig.EXTENDED_REASONING,
+    WEB_GROUNDING:
+      userConfig.WEB_GROUNDING === undefined
+        ? existingConfig.WEB_GROUNDING
+        : userConfig.WEB_GROUNDING,
     USE_CUSTOM_URL:
       userConfig.USE_CUSTOM_URL === undefined
         ? existingConfig.USE_CUSTOM_URL
         : userConfig.USE_CUSTOM_URL,
+    OPEN_WEBUI_IMAGE_URL:
+      userConfig.OPEN_WEBUI_IMAGE_URL || existingConfig.OPEN_WEBUI_IMAGE_URL,
+    OPEN_WEBUI_IMAGE_API_KEY:
+      userConfig.OPEN_WEBUI_IMAGE_API_KEY || existingConfig.OPEN_WEBUI_IMAGE_API_KEY,
+    CUSTOM_IMAGE_URL:
+      userConfig.CUSTOM_IMAGE_URL || existingConfig.CUSTOM_IMAGE_URL,
+    CUSTOM_IMAGE_API_KEY:
+      userConfig.CUSTOM_IMAGE_API_KEY || existingConfig.CUSTOM_IMAGE_API_KEY,
+    CUSTOM_IMAGE_MODEL:
+      userConfig.CUSTOM_IMAGE_MODEL || existingConfig.CUSTOM_IMAGE_MODEL,
+    CODEX_MODEL: userConfig.CODEX_MODEL || existingConfig.CODEX_MODEL,
+    CODEX_ACCESS_TOKEN: existingConfig.CODEX_ACCESS_TOKEN,
+    CODEX_REFRESH_TOKEN: existingConfig.CODEX_REFRESH_TOKEN,
+    CODEX_TOKEN_EXPIRES: existingConfig.CODEX_TOKEN_EXPIRES,
+    CODEX_ACCOUNT_ID: existingConfig.CODEX_ACCOUNT_ID,
   };
-  fs.writeFileSync(userConfigPath, JSON.stringify(mergedConfig));
-  return NextResponse.json(mergedConfig);
+  if (userConfigPath) {
+    fs.writeFileSync(userConfigPath, JSON.stringify(mergedConfig));
+  }
+  return NextResponse.json(
+    stripAuthFields(mergedConfig as Record<string, unknown>)
+  );
 }

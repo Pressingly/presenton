@@ -2,13 +2,15 @@
 
 import mixpanel from 'mixpanel-browser';
 
-const MIXPANEL_TOKEN = '4ebfc788c739c72a9565c489a7cc2eac';
+const MIXPANEL_TOKEN = 'd726e8bea8ec147f4c7720060cb2e6d1';
 
 export enum MixpanelEvent {
   PageView = 'Page View',
   Navigation = 'Navigation',
-  Onboarding_Providers_Models_Selected = 'Onboarding Providers Models Selected',
-  Codex_SignIn_API_Call = 'Codex Sign In API Call',
+  Home_SaveConfiguration_Button_Clicked = 'Home Save Configuration Button Clicked',
+  Home_SaveConfiguration_API_Call = 'Home Save Configuration API Call',
+  Home_CheckOllamaModelPulled_API_Call = 'Home Check Ollama Model Pulled API Call',
+  Home_DownloadOllamaModel_API_Call = 'Home Download Ollama Model API Call',
   Outline_Generate_Presentation_Button_Clicked = 'Outline Generate Presentation Button Clicked',
   Outline_Select_Template_Button_Clicked = 'Outline Select Template Button Clicked',
   Outline_Add_Slide_Button_Clicked = 'Outline Add Slide Button Clicked',
@@ -36,8 +38,6 @@ export enum MixpanelEvent {
   Upload_Upload_Documents_API_Call = 'Upload Upload Documents API Call',
   Upload_Decompose_Documents_API_Call = 'Upload Decompose Documents API Call',
   Upload_Create_Presentation_API_Call = 'Upload Create Presentation API Call',
-  Upload_GetStarted_Button_Clicked = 'Upload Get Started Button Clicked',
-  Upload_Validation_Failed = 'Upload Validation Failed',
   DocumentsPreview_Create_Presentation_API_Call = 'Documents Preview Create Presentation API Call',
   DocumentsPreview_Next_Button_Clicked = 'Documents Preview Next Button Clicked',
   Settings_SaveConfiguration_Button_Clicked = 'Settings Save Configuration Button Clicked',
@@ -51,15 +51,16 @@ export enum MixpanelEvent {
   ImageEditor_GenerateImage_API_Call = 'Image Editor Generate Image API Call',
   ImageEditor_UploadImage_API_Call = 'Image Editor Upload Image API Call',
   Header_ReGenerate_Button_Clicked = 'Header ReGenerate Button Clicked',
-
-  Dashboard_Page_Viewed = 'Dashboard Page Viewed',
-  Dashboard_New_Presentation_Clicked = 'Dashboard New Presentation Clicked',
-  Dashboard_Presentation_Opened = 'Dashboard Presentation Opened',
-  Dashboard_Presentation_Deleted = 'Dashboard Presentation Deleted',
-  Dashboard_Create_New_Card_Clicked = 'Dashboard Create New Card Clicked',
-
   Sidebar_Navigation_Clicked = 'Sidebar Navigation Clicked',
 
+  // Dashboard
+  Dashboard_Page_Viewed = 'Dashboard Page Viewed',
+  Dashboard_New_Presentation_Clicked = 'Dashboard New Presentation Clicked',
+  Dashboard_Create_New_Card_Clicked = 'Dashboard Create New Card Clicked',
+  Dashboard_Presentation_Opened = 'Dashboard Presentation Opened',
+  Dashboard_Presentation_Deleted = 'Dashboard Presentation Deleted',
+
+  // Templates
   Templates_Page_Viewed = 'Templates Page Viewed',
   Templates_Tab_Switched = 'Templates Tab Switched',
   Templates_Inbuilt_Opened = 'Templates Inbuilt Opened',
@@ -67,15 +68,24 @@ export enum MixpanelEvent {
   Templates_New_Template_Clicked = 'Templates New Template Clicked',
   Templates_Build_Template_Clicked = 'Templates Build Template Clicked',
 
+  // Theme
   Theme_Page_Viewed = 'Theme Page Viewed',
+  Theme_Tab_Switched = 'Theme Tab Switched',
+  Theme_New_Theme_Clicked = 'Theme New Theme Clicked',
   Theme_Selected = 'Theme Selected',
   Theme_Saved = 'Theme Saved',
   Theme_Deleted = 'Theme Deleted',
   Theme_Font_Changed = 'Theme Font Changed',
   Theme_Custom_Font_Uploaded = 'Theme Custom Font Uploaded',
   Theme_Logo_Uploaded = 'Theme Logo Uploaded',
-  Theme_Tab_Switched = 'Theme Tab Switched',
-  Theme_New_Theme_Clicked = 'Theme New Theme Clicked',
+
+  // Upload
+  Upload_GetStarted_Button_Clicked = 'Upload Get Started Button Clicked',
+  Upload_Validation_Failed = 'Upload Validation Failed',
+
+  // Codex
+  Codex_SignIn_API_Call = 'Codex Sign In API Call',
+
 }
 
 export type MixpanelProps = Record<string, unknown>;
@@ -99,27 +109,24 @@ async function ensureTelemetryStatus(): Promise<boolean> {
     return window.__mixpanel_telemetry_enabled;
   }
   if (!trackingCheckPromise) {
-    trackingCheckPromise = (async () => {
-      try {
-        let data;
-        // Check if running in Electron environment
-        if (typeof window !== 'undefined' && window.electron?.telemetryStatus) {
-          // Use Electron IPC handler
-          data = await window.electron.telemetryStatus();
-        } else {
-          // Fallback to API route for web-based deployments
-          const res = await fetch('/api/telemetry-status');
-          data = await res.json();
+    trackingCheckPromise = fetch('/api/telemetry-status')
+      .then(async (res) => {
+        try {
+          const data = await res.json();
+          const enabled = Boolean(data?.telemetryEnabled);
+          window.__mixpanel_telemetry_enabled = enabled;
+          return enabled;
+        } catch {
+          // If the API response is malformed, default to enabling tracking
+          window.__mixpanel_telemetry_enabled = true;
+          return true;
         }
-        const enabled = Boolean(data?.telemetryEnabled);
-        window.__mixpanel_telemetry_enabled = enabled;
-        return enabled;
-      } catch {
+      })
+      .catch(() => {
         // If the API call fails, default to enabling tracking
         window.__mixpanel_telemetry_enabled = true;
         return true;
-      }
-    })();
+      });
   }
   return trackingCheckPromise;
 }
@@ -131,11 +138,7 @@ export function initMixpanel(): void {
   void ensureTelemetryStatus().then((enabled) => {
     if (!enabled) return;
     if (window.__mixpanel_initialized) return;
-    mixpanel.init(MIXPANEL_TOKEN as string, { track_pageview: false, api_host: 'https://api-eu.mixpanel.com', });
-    const appVersion = window.env?.APP_VERSION;
-    if (appVersion) {
-      mixpanel.register({ app_version: appVersion });
-    }
+    mixpanel.init(MIXPANEL_TOKEN as string, { track_pageview: false });
     mixpanel.identify(mixpanel.get_distinct_id());
     window.__mixpanel_initialized = true;
   });
@@ -170,6 +173,12 @@ export function getDistinctId(): string | undefined {
   return mixpanel.get_distinct_id();
 }
 
+export function setTelemetryEnabled(enabled: boolean): void {
+  if (typeof window !== 'undefined') {
+    window.__mixpanel_telemetry_enabled = enabled;
+  }
+}
+
 export function identifyAnonymous(): void {
   if (!canUseMixpanel()) return;
   if (typeof window !== 'undefined' && window.__mixpanel_telemetry_enabled === false) {
@@ -182,29 +191,13 @@ export function identifyAnonymous(): void {
   mixpanel.identify(mixpanel.get_distinct_id());
 }
 
-export function resetTelemetryCache(): void {
-  trackingCheckPromise = null;
-  if (typeof window !== 'undefined') {
-    delete window.__mixpanel_telemetry_enabled;
-  }
-}
-
-export function setTelemetryEnabled(enabled: boolean): void {
-  if (typeof window !== 'undefined') {
-    window.__mixpanel_telemetry_enabled = enabled;
-  }
-  trackingCheckPromise = null;
-  if (enabled && !window?.__mixpanel_initialized) {
-    initMixpanel();
-  }
-}
-
 export default {
   initMixpanel,
   track,
   trackEvent,
   getDistinctId,
   identifyAnonymous,
-  resetTelemetryCache,
   setTelemetryEnabled,
 };
+
+

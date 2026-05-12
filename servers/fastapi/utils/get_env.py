@@ -165,3 +165,30 @@ def get_custom_image_api_key_env():
 def get_custom_image_model_env():
     return os.getenv("CUSTOM_IMAGE_MODEL")
 
+
+def get_next_public_fast_api_env():
+    return os.getenv("FASTAPI_PUBLIC_URL")
+
+
+# Codex user profile
+def get_codex_email_env():
+    return os.getenv("CODEX_EMAIL")
+
+
+def get_codex_username_env():
+    return os.getenv("CODEX_USERNAME")
+
+
+def get_codex_is_pro_env():
+    return os.getenv("CODEX_IS_PRO")
+
+
+# Sentry
+def get_sentry_traces_sample_rate_env():
+    return os.getenv("SENTRY_TRACES_SAMPLE_RATE")
+
+
+def get_sentry_send_default_pii_env():
+    return os.getenv("SENTRY_SEND_DEFAULT_PII")
+
+

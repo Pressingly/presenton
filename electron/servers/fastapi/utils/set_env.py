@@ -122,17 +122,42 @@ def set_codex_account_id_env(value: str):
     os.environ["CODEX_ACCOUNT_ID"] = value
 
 
-def set_codex_username_env(value: str):
-    os.environ["CODEX_USERNAME"] = value
+def set_codex_model_env(value: str):
+    os.environ["CODEX_MODEL"] = value
 
 
+# Open WebUI Image Provider
+def set_open_webui_image_url_env(value: str):
+    os.environ["OPEN_WEBUI_IMAGE_URL"] = value
+
+
+def set_open_webui_image_api_key_env(value: str):
+    os.environ["OPEN_WEBUI_IMAGE_API_KEY"] = value
+
+
+# Custom Image Provider (OpenAI-compatible)
+def set_custom_image_url_env(value: str):
+    os.environ["CUSTOM_IMAGE_URL"] = value
+
+
+def set_custom_image_api_key_env(value: str):
+    os.environ["CUSTOM_IMAGE_API_KEY"] = value
+
+
+def set_custom_image_model_env(value: str):
+    os.environ["CUSTOM_IMAGE_MODEL"] = value
+
+
+# Codex user profile
 def set_codex_email_env(value: str):
     os.environ["CODEX_EMAIL"] = value
+
+
+def set_codex_username_env(value: str):
+    os.environ["CODEX_USERNAME"] = value
 
 
 def set_codex_is_pro_env(value: str):
     os.environ["CODEX_IS_PRO"] = value
 
 
-def set_codex_model_env(value: str):
-    os.environ["CODEX_MODEL"] = value

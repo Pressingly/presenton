@@ -5,15 +5,18 @@ import os
 import aiohttp
 from fastapi import HTTPException
 from google import genai
-from google.genai import types
 from openai import NOT_GIVEN, AsyncOpenAI
 from models.image_prompt import ImagePrompt
 from models.sql.image_asset import ImageAsset
 from utils.get_env import (
     get_dall_e_3_quality_env,
     get_gpt_image_1_5_quality_env,
-    get_next_public_fast_api_env,
     get_pexels_api_key_env,
+    get_open_webui_image_url_env,
+    get_open_webui_image_api_key_env,
+    get_custom_image_url_env,
+    get_custom_image_api_key_env,
+    get_custom_image_model_env,
 )
 from utils.get_env import get_pixabay_api_key_env
 from utils.get_env import get_comfyui_url_env
@@ -27,6 +30,8 @@ from utils.image_provider import (
     is_nanobanana_pro_selected,
     is_dalle3_selected,
     is_comfyui_selected,
+    is_open_webui_selected,
+    is_custom_image_selected,
 )
 import uuid
 
@@ -55,21 +60,14 @@ class ImageGenerationService:
             return self.generate_image_openai_gpt_image_1_5
         elif is_comfyui_selected():
             return self.generate_image_comfyui
+        elif is_open_webui_selected():
+            return self.generate_image_open_webui
+        elif is_custom_image_selected():
+            return self.generate_image_custom
         return None
 
     def is_stock_provider_selected(self):
         return is_pixels_selected() or is_pixabay_selected()
-
-    def _to_frontend_url(self, path: str) -> str:
-        if path.startswith("http://") or path.startswith("https://"):
-            return path
-
-        fastapi_origin = (get_next_public_fast_api_env() or "").strip()
-        if not fastapi_origin:
-            return path
-
-        normalized_path = path if path.startswith("/") else f"/{path}"
-        return f"{fastapi_origin.rstrip('/')}{normalized_path}"
 
     async def generate_image(self, prompt: ImagePrompt) -> str | ImageAsset:
         """
@@ -81,11 +79,11 @@ class ImageGenerationService:
         """
         if self.is_image_generation_disabled:
             print("Image generation is disabled. Using placeholder image.")
-            return self._to_frontend_url("/static/images/placeholder.jpg")
+            return "/static/images/placeholder.jpg"
 
         if not self.image_gen_func:
             print("No image generation function found. Using placeholder image.")
-            return self._to_frontend_url("/static/images/placeholder.jpg")
+            return "/static/images/placeholder.jpg"
 
         image_prompt = prompt.get_image_prompt(
             with_theme=not self.is_stock_provider_selected()
@@ -111,15 +109,11 @@ class ImageGenerationService:
                             "theme_prompt": prompt.theme_prompt,
                         },
                     )
-                elif image_path.startswith("/app_data/") or image_path.startswith(
-                    "/static/"
-                ):
-                    return self._to_frontend_url(image_path)
             raise Exception(f"Image not found at {image_path}")
 
         except Exception as e:
             print(f"Error generating image: {e}")
-            return self._to_frontend_url("/static/images/placeholder.jpg")
+            return "/static/images/placeholder.jpg"
 
     async def generate_image_openai(
         self, prompt: str, output_directory: str, model: str, quality: str
@@ -158,6 +152,137 @@ class ImageGenerationService:
             get_gpt_image_1_5_quality_env() or "medium",
         )
 
+    async def generate_image_open_webui(
+        self, prompt: str, output_directory: str
+    ) -> str:
+        base_url = get_open_webui_image_url_env()
+        if not base_url:
+            raise ValueError("OPEN_WEBUI_IMAGE_URL environment variable is not set")
+
+        base_url = base_url.rstrip("/")
+        api_key = get_open_webui_image_api_key_env() or ""
+
+        from urllib.parse import urlparse
+
+        parsed = urlparse(base_url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        payload = {
+            "prompt": prompt,
+            "n": 1,
+            "size": "1024x1024",
+        }
+
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            resp = await session.post(
+                f"{base_url}/images/generations",
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=300),
+            )
+
+            if resp.status != 200:
+                error_text = await resp.text()
+                raise Exception(
+                    f"Open WebUI image generation returned {resp.status}: {error_text}"
+                )
+
+            body = await resp.json()
+
+            # Open WebUI returns a bare [...] array instead of {"data": [...]}.
+            if isinstance(body, list):
+                items = body
+            elif isinstance(body, dict) and "data" in body:
+                items = body["data"]
+            else:
+                raise Exception(f"Unexpected response format: {type(body)}")
+
+            if not items:
+                raise Exception("Open WebUI returned empty results")
+
+            item = items[0]
+            image_path = os.path.join(output_directory, f"{uuid.uuid4()}.png")
+
+            if item.get("b64_json"):
+                with open(image_path, "wb") as f:
+                    f.write(base64.b64decode(item["b64_json"]))
+            elif item.get("url"):
+                image_url = item["url"]
+                # Open WebUI returns relative URLs like /api/v1/files/.../content
+                if image_url.startswith("/"):
+                    image_url = origin + image_url
+                dl_headers = {}
+                if api_key:
+                    dl_headers["Authorization"] = f"Bearer {api_key}"
+                dl_resp = await session.get(
+                    image_url,
+                    headers=dl_headers,
+                    timeout=aiohttp.ClientTimeout(total=120),
+                )
+                if dl_resp.status != 200:
+                    raise Exception(
+                        f"Failed to download image: {dl_resp.status}"
+                    )
+                with open(image_path, "wb") as f:
+                    f.write(await dl_resp.read())
+            else:
+                raise Exception("Open WebUI returned no image data")
+
+        return image_path
+
+    async def generate_image_custom(
+        self, prompt: str, output_directory: str
+    ) -> str:
+        """
+        Generate an image using a custom OpenAI-compatible image generation endpoint.
+
+        Requires:
+        - CUSTOM_IMAGE_URL: Base URL of the OpenAI-compatible API (e.g. https://api.example.com/v1)
+        - CUSTOM_IMAGE_MODEL: Model name to use
+        - CUSTOM_IMAGE_API_KEY: Optional API key
+        """
+        base_url = get_custom_image_url_env()
+        if not base_url:
+            raise ValueError("CUSTOM_IMAGE_URL environment variable is not set")
+
+        model = get_custom_image_model_env()
+        if not model:
+            raise ValueError("CUSTOM_IMAGE_MODEL environment variable is not set")
+
+        api_key = get_custom_image_api_key_env() or "not-needed"
+
+        client = AsyncOpenAI(base_url=base_url.rstrip("/"), api_key=api_key)
+        result = await client.images.generate(
+            model=model,
+            prompt=prompt,
+            n=1,
+        )
+
+        image_path = os.path.join(output_directory, f"{uuid.uuid4()}.png")
+
+        item = result.data[0]
+        if item.b64_json:
+            with open(image_path, "wb") as f:
+                f.write(base64.b64decode(item.b64_json))
+        elif item.url:
+            async with aiohttp.ClientSession(trust_env=True) as session:
+                resp = await session.get(
+                    item.url,
+                    timeout=aiohttp.ClientTimeout(total=120),
+                )
+                if resp.status != 200:
+                    raise Exception(f"Failed to download custom image: {resp.status}")
+                with open(image_path, "wb") as f:
+                    f.write(await resp.read())
+        else:
+            raise Exception("Custom image provider returned no image data")
+
+        return image_path
+
     async def _generate_image_google(
         self, prompt: str, output_directory: str, model: str
     ) -> str:
@@ -166,45 +291,15 @@ class ImageGenerationService:
         response = await asyncio.to_thread(
             client.models.generate_content,
             model=model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_modalities=["IMAGE"],
-            ),
+            contents=[prompt],
         )
 
-        # Latest SDK docs expose images in response.parts.
-        response_parts = getattr(response, "parts", None)
-        if not response_parts and getattr(response, "candidates", None):
-            first_candidate = response.candidates[0] if response.candidates else None
-            content = (
-                getattr(first_candidate, "content", None) if first_candidate else None
-            )
-            response_parts = getattr(content, "parts", None) if content else None
-
         image_path = None
-        for part in response_parts or []:
+        for part in response.candidates[0].content.parts:
             if part.inline_data is not None:
-                mime_type = getattr(part.inline_data, "mime_type", "") or ""
-                ext = (
-                    mime_type.split("/")[-1]
-                    if mime_type.startswith("image/")
-                    else "png"
-                )
-                image_path = os.path.join(output_directory, f"{uuid.uuid4()}.{ext}")
-                if hasattr(part, "as_image"):
-                    part.as_image().save(image_path)
-                else:
-                    # Backward-compatible fallback if helper method is unavailable.
-                    image_data = getattr(part.inline_data, "data", None)
-                    if image_data is None:
-                        continue
-                    image_bytes = (
-                        base64.b64decode(image_data)
-                        if isinstance(image_data, str)
-                        else image_data
-                    )
-                    with open(image_path, "wb") as image_file:
-                        image_file.write(image_bytes)
+                image = part.as_image()
+                image_path = os.path.join(output_directory, f"{uuid.uuid4()}.jpg")
+                image.save(image_path)
 
         if not image_path:
             raise HTTPException(
@@ -216,9 +311,9 @@ class ImageGenerationService:
     async def generate_image_gemini_flash(
         self, prompt: str, output_directory: str
     ) -> str:
-        """Generate image using Gemini Flash (gemini-2.5-flash-image)."""
+        """Generate image using Gemini Flash (gemini-2.5-flash-image-preview)."""
         return await self._generate_image_google(
-            prompt, output_directory, "gemini-2.5-flash-image"
+            prompt, output_directory, "gemini-2.5-flash-image-preview"
         )
 
     async def generate_image_nanobanana_pro(
@@ -229,92 +324,24 @@ class ImageGenerationService:
             prompt, output_directory, "gemini-3-pro-image-preview"
         )
 
-    async def get_image_from_pexels(
-        self, prompt: str, api_key: str | None = None, limit: int = 1
-    ) -> str | list[str]:
-        per_page = max(1, min(limit, 80))
-        resolved_api_key = (api_key or get_pexels_api_key_env() or "").strip()
-
+    async def get_image_from_pexels(self, prompt: str) -> str:
         async with aiohttp.ClientSession(trust_env=True) as session:
             response = await session.get(
-                "https://api.pexels.com/v1/search",
-                params={"query": prompt, "per_page": per_page},
-                headers={"Authorization": resolved_api_key} if resolved_api_key else {},
-                timeout=aiohttp.ClientTimeout(total=20),
+                f"https://api.pexels.com/v1/search?query={prompt}&per_page=1",
+                headers={"Authorization": f"{get_pexels_api_key_env()}"},
             )
-
-            if response.status in {401, 403}:
-                raise HTTPException(status_code=401, detail="Invalid Pexels API key")
-            if response.status != 200:
-                error_text = await response.text()
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Pexels request failed: {error_text}",
-                )
-
             data = await response.json()
-            photos = data.get("photos", [])
-            image_urls = [
-                photo.get("src", {}).get("large")
-                for photo in photos
-                if photo.get("src", {}).get("large")
-            ]
+            image_url = data["photos"][0]["src"]["large"]
+            return image_url
 
-            if limit <= 1:
-                return image_urls[0] if image_urls else ""
-            return image_urls[:limit]
-
-    async def get_image_from_pixabay(
-        self, prompt: str, api_key: str | None = None, limit: int = 1
-    ) -> str | list[str]:
-        per_page = max(3, min(limit, 200))
-        resolved_api_key = (api_key or get_pixabay_api_key_env() or "").strip()
-
+    async def get_image_from_pixabay(self, prompt: str) -> str:
         async with aiohttp.ClientSession(trust_env=True) as session:
             response = await session.get(
-                "https://pixabay.com/api/",
-                params={
-                    "key": resolved_api_key,
-                    "q": prompt[:99],
-                    "image_type": "photo",
-                    "per_page": per_page,
-                },
-                timeout=aiohttp.ClientTimeout(total=20),
+                f"https://pixabay.com/api/?key={get_pixabay_api_key_env()}&q={prompt}&image_type=photo&per_page=3"
             )
-
-            if response.status in {401, 403}:
-                error_text = await response.text()
-                raise HTTPException(
-                    status_code=401,
-                    detail=f"Invalid Pixabay API key: {error_text}",
-                )
-            if response.status == 400:
-                error_text = await response.text()
-                if "api key" in error_text.lower():
-                    raise HTTPException(
-                        status_code=401,
-                        detail=f"Invalid Pixabay API key: {error_text}",
-                    )
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Pixabay request invalid: {error_text}",
-                )
-            if response.status != 200:
-                error_text = await response.text()
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Pixabay request failed: {error_text}",
-                )
-
             data = await response.json()
-            hits = data.get("hits", [])
-            image_urls = [
-                hit.get("largeImageURL") for hit in hits if hit.get("largeImageURL")
-            ]
-
-            if limit <= 1:
-                return image_urls[0] if image_urls else ""
-            return image_urls[:limit]
+            image_url = data["hits"][0]["largeImageURL"]
+            return image_url
 
     async def generate_image_comfyui(self, prompt: str, output_directory: str) -> str:
         """
@@ -456,8 +483,6 @@ class ImageGenerationService:
         raise ValueError(
             "Found 'Input Prompt', but no writable prompt string field was found directly or through linked nodes."
         )
-
-
 
     async def _submit_comfyui_workflow(
         self, session: aiohttp.ClientSession, comfyui_url: str, workflow: dict

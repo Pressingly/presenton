@@ -102,6 +102,19 @@ export const getLLMConfigValidationError = (
           return "ComfyUI server URL is required.";
         }
         break;
+      case "open_webui":
+        if (!isProvided(llmConfig.OPEN_WEBUI_IMAGE_URL)) {
+          return "Open WebUI URL is required.";
+        }
+        break;
+      case "custom_image":
+        if (!isProvided(llmConfig.CUSTOM_IMAGE_URL)) {
+          return "Custom image URL is required.";
+        }
+        if (!isProvided(llmConfig.CUSTOM_IMAGE_MODEL)) {
+          return "Select a model for your custom image provider. Fetch available models after entering the URL.";
+        }
+        break;
       default:
         return "Select a valid image provider.";
     }
@@ -110,54 +123,17 @@ export const getLLMConfigValidationError = (
   return null;
 };
 
-/** Codex is selected but no model chosen — block navigation away from Settings. */
-export function isCodexMissingSelectedModel(llmConfig: LLMConfig): boolean {
-  return llmConfig.LLM === "codex" && !isProvided(llmConfig.CODEX_MODEL);
-}
-
-/**
- * While on Settings with Codex selected and no model (e.g. after sign-out), block leaving
- * for any destination other than Settings. Resolves once the user picks a model, signs in again, or switches provider.
- */
-export function shouldBlockCodexOutboundNav(
-  llmConfig: LLMConfig,
-  destinationPath: string,
-  currentPathname: string | null
-): boolean {
-  if (!isCodexMissingSelectedModel(llmConfig)) return false;
-  const onSettings =
-    currentPathname === "/settings" ||
-    (currentPathname?.startsWith("/settings/") ?? false);
-  if (!onSettings) return false;
-  const path = destinationPath.split("?")[0] || "";
-  if (path === "/settings" || path.startsWith("/settings/")) return false;
-  return true;
-}
-
-/** Keep Redux in sync when Codex signs out so nav guards see cleared CODEX_MODEL. */
-export function syncStoreAfterCodexSignOut(): void {
-  const prev = store.getState().userConfig.llm_config;
-  store.dispatch(
-    setLLMConfig({
-      ...prev,
-      LLM: "codex",
-      CODEX_MODEL: "",
-    })
-  );
-}
-
 export const handleSaveLLMConfig = async (llmConfig: LLMConfig) => {
   const validationError = getLLMConfigValidationError(llmConfig);
   if (validationError) {
     throw new Error(validationError);
   }
-  
-  // Check if running in Electron environment
-  if (typeof window !== 'undefined' && window.electron?.setUserConfig) {
-    // Use Electron IPC handler
-    await window.electron.setUserConfig(llmConfig);
+
+  if (typeof window !== 'undefined' && (window as any).electron) {
+    // Electron mode: use IPC bridge (static export has no running API routes)
+    await (window as any).electron.setUserConfig(llmConfig);
   } else {
-    // Fallback to API route for web-based deployments
+    // Docker / web mode: use Next.js API route
     await fetch("/api/user-config", {
       method: "POST",
       body: JSON.stringify(llmConfig),

@@ -51,6 +51,41 @@ export enum MixpanelEvent {
   ImageEditor_GenerateImage_API_Call = 'Image Editor Generate Image API Call',
   ImageEditor_UploadImage_API_Call = 'Image Editor Upload Image API Call',
   Header_ReGenerate_Button_Clicked = 'Header ReGenerate Button Clicked',
+  Sidebar_Navigation_Clicked = 'Sidebar Navigation Clicked',
+
+  // Dashboard
+  Dashboard_Page_Viewed = 'Dashboard Page Viewed',
+  Dashboard_New_Presentation_Clicked = 'Dashboard New Presentation Clicked',
+  Dashboard_Create_New_Card_Clicked = 'Dashboard Create New Card Clicked',
+  Dashboard_Presentation_Opened = 'Dashboard Presentation Opened',
+  Dashboard_Presentation_Deleted = 'Dashboard Presentation Deleted',
+
+  // Templates
+  Templates_Page_Viewed = 'Templates Page Viewed',
+  Templates_Tab_Switched = 'Templates Tab Switched',
+  Templates_Inbuilt_Opened = 'Templates Inbuilt Opened',
+  Templates_Custom_Opened = 'Templates Custom Opened',
+  Templates_New_Template_Clicked = 'Templates New Template Clicked',
+  Templates_Build_Template_Clicked = 'Templates Build Template Clicked',
+
+  // Theme
+  Theme_Page_Viewed = 'Theme Page Viewed',
+  Theme_Tab_Switched = 'Theme Tab Switched',
+  Theme_New_Theme_Clicked = 'Theme New Theme Clicked',
+  Theme_Selected = 'Theme Selected',
+  Theme_Saved = 'Theme Saved',
+  Theme_Deleted = 'Theme Deleted',
+  Theme_Font_Changed = 'Theme Font Changed',
+  Theme_Custom_Font_Uploaded = 'Theme Custom Font Uploaded',
+  Theme_Logo_Uploaded = 'Theme Logo Uploaded',
+
+  // Upload
+  Upload_GetStarted_Button_Clicked = 'Upload Get Started Button Clicked',
+  Upload_Validation_Failed = 'Upload Validation Failed',
+
+  // Codex
+  Codex_SignIn_API_Call = 'Codex Sign In API Call',
+
 }
 
 export type MixpanelProps = Record<string, unknown>;
@@ -138,6 +173,12 @@ export function getDistinctId(): string | undefined {
   return mixpanel.get_distinct_id();
 }
 
+export function setTelemetryEnabled(enabled: boolean): void {
+  if (typeof window !== 'undefined') {
+    window.__mixpanel_telemetry_enabled = enabled;
+  }
+}
+
 export function identifyAnonymous(): void {
   if (!canUseMixpanel()) return;
   if (typeof window !== 'undefined' && window.__mixpanel_telemetry_enabled === false) {
@@ -156,6 +197,7 @@ export default {
   trackEvent,
   getDistinctId,
   identifyAnonymous,
+  setTelemetryEnabled,
 };
 
 

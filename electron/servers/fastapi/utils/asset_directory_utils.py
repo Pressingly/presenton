@@ -5,13 +5,12 @@ from urllib.parse import urlparse, unquote
 from utils.get_env import get_app_data_directory_env
 
 
-def resolve_app_path_to_filesystem(path_or_url: str) -> Optional[str]:
+def resolve_image_path_to_filesystem(path_or_url: str) -> Optional[str]:
     """
-    Resolve an app-served path or URL to an actual filesystem path.
+    Resolve an image path or URL to an actual filesystem path.
 
     Handles:
     - Path strings: /app_data/images/..., /static/..., absolute paths, relative
-    - file:// URLs returned by export runtimes
     - HTTP URLs whose path component is an absolute filesystem path (Mac/Electron):
       When img src is /Users/.../images/xxx.png, browser resolves to
       http://origin/Users/.../images/xxx.png. Next.js returns 404 for these.
@@ -22,12 +21,10 @@ def resolve_app_path_to_filesystem(path_or_url: str) -> Optional[str]:
         return None
     # Extract path from HTTP URL if needed
     path = path_or_url
-    if path_or_url.startswith("http") or path_or_url.startswith("file:"):
+    if path_or_url.startswith("http"):
         try:
             parsed = urlparse(path_or_url)
             path = unquote(parsed.path)
-            if parsed.scheme == "file" and os.name == "nt" and path.startswith("/"):
-                path = path[1:]
         except Exception:
             return None
     # Handle /app_data/images/
@@ -66,8 +63,40 @@ def resolve_app_path_to_filesystem(path_or_url: str) -> Optional[str]:
     return actual if os.path.isfile(actual) else None
 
 
-def resolve_image_path_to_filesystem(path_or_url: str) -> Optional[str]:
-    return resolve_app_path_to_filesystem(path_or_url)
+def filesystem_path_to_app_data_url(path: str) -> str:
+    """
+    Convert an absolute filesystem path inside APP_DATA_DIRECTORY to a
+    FastAPI-mounted /app_data/... URL so the frontend can resolve it correctly
+    on any OS (macOS paths like /Users/.../Library/... would otherwise break).
+    Returns the path unchanged if it doesn't fall under APP_DATA_DIRECTORY or
+    is already a URL/relative path.
+    """
+    if not path or path.startswith("/app_data/") or path.startswith("/static/") or path.startswith("http"):
+        return path
+    app_data_dir = get_app_data_directory_env()
+    if app_data_dir:
+        normalized_app_data = app_data_dir.rstrip("/\\")
+        normalized_path = path.replace("\\", "/")
+        normalized_base = normalized_app_data.replace("\\", "/")
+        if normalized_path.startswith(normalized_base + "/"):
+            relative = normalized_path[len(normalized_base) + 1:]
+            return f"/app_data/{relative}"
+    return path
+
+
+def resolve_app_path_to_filesystem(path_or_url: str) -> Optional[str]:
+    if not path_or_url:
+        return None
+    if path_or_url.startswith("file:"):
+        try:
+            parsed = urlparse(path_or_url)
+            path = unquote(parsed.path)
+            if os.name == "nt" and path.startswith("/"):
+                path = path[1:]
+            return path if os.path.isfile(path) else None
+        except Exception:
+            return None
+    return resolve_image_path_to_filesystem(path_or_url)
 
 
 def get_images_directory():

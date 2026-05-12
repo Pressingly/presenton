@@ -153,6 +153,12 @@ export async function POST(request: Request) {
       userConfig.OPEN_WEBUI_IMAGE_URL || existingConfig.OPEN_WEBUI_IMAGE_URL,
     OPEN_WEBUI_IMAGE_API_KEY:
       userConfig.OPEN_WEBUI_IMAGE_API_KEY || existingConfig.OPEN_WEBUI_IMAGE_API_KEY,
+    CUSTOM_IMAGE_URL:
+      userConfig.CUSTOM_IMAGE_URL || existingConfig.CUSTOM_IMAGE_URL,
+    CUSTOM_IMAGE_API_KEY:
+      userConfig.CUSTOM_IMAGE_API_KEY || existingConfig.CUSTOM_IMAGE_API_KEY,
+    CUSTOM_IMAGE_MODEL:
+      userConfig.CUSTOM_IMAGE_MODEL || existingConfig.CUSTOM_IMAGE_MODEL,
     CODEX_MODEL: userConfig.CODEX_MODEL || existingConfig.CODEX_MODEL,
     CODEX_ACCESS_TOKEN: existingConfig.CODEX_ACCESS_TOKEN,
     CODEX_REFRESH_TOKEN: existingConfig.CODEX_REFRESH_TOKEN,
