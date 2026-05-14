@@ -80,6 +80,7 @@ export async function startNextJsServer(
         stdio: ["ignore", "pipe", "pipe"],
         env: { ...process.env, ...env },
         shell: process.platform === "win32",
+        windowsHide: process.platform === "win32",
       }
     );
     const nextjsLogPath = path.join(logsDir, "nextjs-server.log");
