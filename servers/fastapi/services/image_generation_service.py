@@ -324,24 +324,36 @@ class ImageGenerationService:
             prompt, output_directory, "gemini-3-pro-image-preview"
         )
 
-    async def get_image_from_pexels(self, prompt: str) -> str:
+    async def get_image_from_pexels(
+        self, prompt: str, api_key: str | None = None, limit: int = 1
+    ) -> str | list[str]:
+        resolved_key = (api_key or get_pexels_api_key_env() or "").strip()
         async with aiohttp.ClientSession(trust_env=True) as session:
             response = await session.get(
-                f"https://api.pexels.com/v1/search?query={prompt}&per_page=1",
-                headers={"Authorization": f"{get_pexels_api_key_env()}"},
+                f"https://api.pexels.com/v1/search?query={prompt}&per_page={limit}",
+                headers={"Authorization": resolved_key},
             )
             data = await response.json()
-            image_url = data["photos"][0]["src"]["large"]
-            return image_url
+            photos = data.get("photos", [])
+            if not photos:
+                return [] if limit > 1 else ""
+            urls = [p["src"]["large"] for p in photos]
+            return urls if limit > 1 else urls[0]
 
-    async def get_image_from_pixabay(self, prompt: str) -> str:
+    async def get_image_from_pixabay(
+        self, prompt: str, api_key: str | None = None, limit: int = 1
+    ) -> str | list[str]:
+        resolved_key = (api_key or get_pixabay_api_key_env() or "").strip()
         async with aiohttp.ClientSession(trust_env=True) as session:
             response = await session.get(
-                f"https://pixabay.com/api/?key={get_pixabay_api_key_env()}&q={prompt}&image_type=photo&per_page=3"
+                f"https://pixabay.com/api/?key={resolved_key}&q={prompt}&image_type=photo&per_page={limit}"
             )
             data = await response.json()
-            image_url = data["hits"][0]["largeImageURL"]
-            return image_url
+            hits = data.get("hits", [])
+            if not hits:
+                return [] if limit > 1 else ""
+            urls = [h["largeImageURL"] for h in hits]
+            return urls if limit > 1 else urls[0]
 
     async def generate_image_comfyui(self, prompt: str, output_directory: str) -> str:
         """

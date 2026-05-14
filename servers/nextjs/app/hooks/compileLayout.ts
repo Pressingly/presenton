@@ -101,6 +101,11 @@ export function compileCustomLayout(layoutCode: string): CompiledLayout | null {
             return null;
         }
 
+        const wrappedComponent: React.ComponentType<{ data: any }> = ({ data, ...props }) => {
+            return React.createElement(result.component, { ...(props as any), data });
+        };
+        wrappedComponent.displayName = `CompiledTemplateLayout(${result.layoutName || result.layoutId || "Custom"})`;
+
         // Parse schema to get sample data
         let sampleData: Record<string, any> = {};
         if (result.Schema) {
@@ -113,7 +118,7 @@ export function compileCustomLayout(layoutCode: string): CompiledLayout | null {
         const schemaJSON = z.toJSONSchema(result.Schema);
 
         return {
-            component: result.component,
+            component: wrappedComponent,
             layoutId: result.layoutId,
             layoutName: result.layoutName,
             layoutDescription: result.layoutDescription,

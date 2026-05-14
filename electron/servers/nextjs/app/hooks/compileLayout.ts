@@ -23,6 +23,7 @@ function isLikelyBackendAssetPath(value: string): boolean {
     if (value.startsWith("file://")) return true;
     if (value.startsWith("/app_data/") || value.startsWith("/static/")) return true;
     if (value.startsWith("app_data/") || value.startsWith("static/")) return true;
+    if (value.includes("/images/") || value.includes("/uploads/")) return true;
     return value.includes("/app_data/") || value.includes("/static/");
 }
 

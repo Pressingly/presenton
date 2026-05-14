@@ -5,6 +5,7 @@ import uuid
 from sqlalchemy import JSON, Column, DateTime
 from sqlmodel import Field, SQLModel
 
+from utils.asset_directory_utils import filesystem_path_to_app_data_url
 from utils.datetime_utils import get_current_utc_datetime
 
 
@@ -22,8 +23,8 @@ class ImageAsset(SQLModel, table=True):
     @property
     def file_url(self) -> str:
         """
-        Non-Electron backend helper for parity with the Electron ImageAsset model.
-        For now this simply returns the stored path, allowing frontends to use
-        `image.file_url or image.path` without breaking development workflows.
+        Returns a web-safe /app_data/... URL for the stored asset path.
+        Converts absolute filesystem paths to the /app_data/... prefix so the
+        frontend can resolve them correctly regardless of the host OS.
         """
-        return self.path
+        return filesystem_path_to_app_data_url(self.path)

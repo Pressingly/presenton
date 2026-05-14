@@ -75,6 +75,81 @@ function hasBackendAssetPrefix(path: string): boolean {
   return path.startsWith("/static/") || path.startsWith("/app_data/");
 }
 
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function normalizePathSeparators(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
+function toServedAssetPath(rawPath: string): string | null {
+  if (!rawPath) return null;
+
+  let candidatePath = rawPath.trim();
+  if (!candidatePath) return null;
+
+  if (candidatePath.startsWith("file:")) {
+    try {
+      const parsed = new URL(candidatePath);
+      candidatePath = parsed.pathname;
+    } catch {
+      return null;
+    }
+  }
+
+  const normalized = normalizePathSeparators(safeDecodeURIComponent(candidatePath));
+  if (!normalized || normalized.startsWith("/_next/static/")) {
+    return null;
+  }
+
+  const appDataIdx = normalized.indexOf("/app_data/");
+  if (appDataIdx !== -1) {
+    return normalized.slice(appDataIdx);
+  }
+
+  const staticIdx = normalized.indexOf("/static/");
+  if (staticIdx !== -1) {
+    return normalized.slice(staticIdx);
+  }
+
+  if (normalized.startsWith("/images/") || normalized.startsWith("images/")) {
+    const withSlash = normalized.startsWith("/") ? normalized : `/${normalized}`;
+    return `/app_data${withSlash}`;
+  }
+
+  if (normalized.startsWith("/uploads/") || normalized.startsWith("uploads/")) {
+    const withSlash = normalized.startsWith("/") ? normalized : `/${normalized}`;
+    return `/app_data${withSlash}`;
+  }
+
+  const imagesIdx = normalized.lastIndexOf("/images/");
+  if (imagesIdx !== -1) {
+    return `/app_data${normalized.slice(imagesIdx)}`;
+  }
+
+  const uploadsIdx = normalized.lastIndexOf("/uploads/");
+  if (uploadsIdx !== -1) {
+    return `/app_data${normalized.slice(uploadsIdx)}`;
+  }
+
+  return null;
+}
+
+function rewriteHtmlAssetSources(html: string): string {
+  return html.replace(
+    /(<(?:img|source)\b[^>]*\bsrc\s*=\s*)(["'])([^"']+)\2/gi,
+    (match, prefix, quote, src) => {
+      const resolved = resolveBackendAssetUrl(src);
+      return `${prefix}${quote}${resolved || src}${quote}`;
+    }
+  );
+}
+
 // Resolve backend-served asset paths to the FastAPI origin in Electron/runtime split-port setups.
 export function resolveBackendAssetUrl(path?: string): string {
   if (!path) return "";
@@ -82,10 +157,14 @@ export function resolveBackendAssetUrl(path?: string): string {
   const trimmedPath = path.trim();
   if (!trimmedPath) return "";
 
+  if (/<(?:img|source)\b/i.test(trimmedPath)) {
+    return rewriteHtmlAssetSources(trimmedPath);
+  }
+
   if (
     trimmedPath.startsWith("data:") ||
     trimmedPath.startsWith("blob:") ||
-    trimmedPath.startsWith("file:")
+    trimmedPath.startsWith("blob:http")
   ) {
     return trimmedPath;
   }
@@ -96,10 +175,20 @@ export function resolveBackendAssetUrl(path?: string): string {
       if (hasBackendAssetPrefix(parsed.pathname)) {
         return `${getFastAPIUrl()}${parsed.pathname}${parsed.search}${parsed.hash}`;
       }
+
+      const servedPath = toServedAssetPath(parsed.pathname);
+      if (servedPath) {
+        return `${getFastAPIUrl()}${servedPath}${parsed.search}${parsed.hash}`;
+      }
       return trimmedPath;
     } catch {
       return trimmedPath;
     }
+  }
+
+  const servedPath = toServedAssetPath(trimmedPath);
+  if (servedPath) {
+    return `${getFastAPIUrl()}${servedPath}`;
   }
 
   const normalizedPath = withLeadingSlash(trimmedPath);
