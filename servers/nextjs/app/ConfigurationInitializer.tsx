@@ -7,6 +7,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useDispatch } from 'react-redux';
 import { checkIfSelectedOllamaModelIsPulled } from '@/utils/providerUtils';
 import { LLMConfig } from '@/types/llm_config';
+import { toast } from 'sonner';
 
 export function ConfigurationInitializer({ children }: { children: React.ReactNode }) {
   const dispatch = useDispatch();
@@ -59,6 +60,7 @@ export function ConfigurationInitializer({ children }: { children: React.ReactNo
         if (llmConfig.LLM === 'custom') {
           const isAvailable = await checkIfSelectedCustomModelIsAvailable(llmConfig);
           if (!isAvailable) {
+            toast.error('Custom model unavailable. Please check your endpoint URL, API key and if you have active subscription.');
             router.push('/');
             setLoadingToFalseAfterNavigatingTo('/');
             return;
@@ -99,6 +101,10 @@ export function ConfigurationInitializer({ children }: { children: React.ReactNo
           api_key: llmConfig.CUSTOM_LLM_API_KEY,
         }),
       });
+      if (!response.ok) {
+        console.error('Custom model check failed with status:', response.status);
+        return false;
+      }
       const data = await response.json();
       return data.includes(llmConfig.CUSTOM_MODEL);
     } catch (error) {

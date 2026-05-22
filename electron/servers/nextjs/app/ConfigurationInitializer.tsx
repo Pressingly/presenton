@@ -8,6 +8,7 @@ import { useDispatch } from 'react-redux';
 import { checkIfSelectedOllamaModelIsPulled } from '@/utils/providerUtils';
 import { LLMConfig } from '@/types/llm_config';
 import { getApiUrl } from '@/utils/api';
+import { toast } from 'sonner';
 
 export function ConfigurationInitializer({ children }: { children: React.ReactNode }) {
   const dispatch = useDispatch();
@@ -94,6 +95,7 @@ export function ConfigurationInitializer({ children }: { children: React.ReactNo
         if (llmConfig.LLM === 'custom') {
           const isAvailable = await checkIfSelectedCustomModelIsAvailable(llmConfig);
           if (!isAvailable) {
+            toast.error('Custom model unavailable. Please check your endpoint URL and API key.');
             router.push('/');
             setLoadingToFalseAfterNavigatingTo('/');
             return;
