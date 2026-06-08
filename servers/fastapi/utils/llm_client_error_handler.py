@@ -8,6 +8,17 @@ import traceback
 def handle_llm_client_exceptions(e: Exception) -> HTTPException:
     traceback.print_exc()
     if isinstance(e, OpenAIAPIError):
+        error_body = getattr(e, "body", None) or {}
+        error_type = (
+            error_body.get("error", {}).get("type", "")
+            if isinstance(error_body, dict)
+            else ""
+        )
+        if error_type == "budget_exceeded" or "ExceededBudget" in str(getattr(e, "message", "")):
+            return HTTPException(
+                status_code=402,
+                detail="Your API key has exceeded its budget limit. Please add credits to your OpenAI account to continue.",
+            )
         return HTTPException(status_code=500, detail=f"OpenAI API error: {e.message}")
     if isinstance(e, GoogleAPIError):
         return HTTPException(status_code=500, detail=f"Google API error: {e.message}")
