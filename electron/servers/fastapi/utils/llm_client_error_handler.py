@@ -17,9 +17,9 @@ def handle_llm_client_exceptions(e: Exception) -> HTTPException:
         if error_type == "budget_exceeded" or "ExceededBudget" in str(getattr(e, "message", "")):
             return HTTPException(
                 status_code=402,
-                detail="Your API key has exceeded its budget limit. Please add credits to your OpenAI account to continue.",
+                detail="Your API key has exceeded its budget limit. Please add credits to your account to continue.",
             )
-        return HTTPException(status_code=500, detail=f"OpenAI API error: {e.message}")
+        return HTTPException(status_code=500, detail=f"API error: {e.message}")
     if isinstance(e, GoogleAPIError):
         return HTTPException(status_code=500, detail=f"Google API error: {e.message}")
     if isinstance(e, AnthropicAPIError):
