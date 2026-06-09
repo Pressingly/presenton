@@ -11,11 +11,8 @@ def handle_llm_client_exceptions(e: Exception) -> HTTPException:
         return e
     if isinstance(e, OpenAIAPIError):
         error_body = getattr(e, "body", None) or {}
-        error_type = (
-            error_body.get("error", {}).get("type", "")
-            if isinstance(error_body, dict)
-            else ""
-        )
+        error_obj = error_body.get("error", {}) if isinstance(error_body, dict) else {}
+        error_type = error_obj.get("type", "") if isinstance(error_obj, dict) else ""
         if error_type == "budget_exceeded" or "ExceededBudget" in str(getattr(e, "message", "")):
             return HTTPException(
                 status_code=402,
