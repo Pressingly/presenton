@@ -6,9 +6,9 @@ import traceback
 
 
 def handle_llm_client_exceptions(e: Exception) -> HTTPException:
-    traceback.print_exc()
     if isinstance(e, HTTPException):
         return e
+    traceback.print_exc()
     if isinstance(e, OpenAIAPIError):
         error_body = getattr(e, "body", None) or {}
         error_obj = error_body.get("error", {}) if isinstance(error_body, dict) else {}
