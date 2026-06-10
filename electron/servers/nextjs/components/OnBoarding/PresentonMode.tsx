@@ -25,6 +25,7 @@ const PresentonMode = ({ currentStep, setStep }: { currentStep: number, setStep:
     const userConfigState = useSelector((state: RootState) => state.userConfig);
 
     const [showApiKey, setShowApiKey] = useState(false);
+    const [showImageApiKey, setShowImageApiKey] = useState(false);
     const [availableModels, setAvailableModels] = useState<string[]>([]);
     const [openModelSelect, setOpenModelSelect] = useState(false);
     const [modelsLoading, setModelsLoading] = useState(false);
@@ -897,7 +898,7 @@ const PresentonMode = ({ currentStep, setStep }: { currentStep: number, setStep:
                                                 </label>
                                                 <div className="relative">
                                                     <input
-                                                        type={showApiKey ? 'text' : 'password'}
+                                                        type={showImageApiKey ? 'text' : 'password'}
                                                         placeholder="Enter your API key (optional)"
                                                         className="w-full px-4 py-2.5 h-12 outline-none border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-colors"
                                                         value={llmConfig.CUSTOM_IMAGE_API_KEY || ""}
@@ -914,10 +915,10 @@ const PresentonMode = ({ currentStep, setStep }: { currentStep: number, setStep:
                                                     />
                                                     <button
                                                         type="button"
-                                                        onClick={() => setShowApiKey((prev) => !prev)}
+                                                        onClick={() => setShowImageApiKey((prev) => !prev)}
                                                         className='absolute right-2 top-1/2 -translate-y-1/2 bg-white px-2 py-1 cursor-pointer'
                                                     >
-                                                        {showApiKey ? <Eye className='w-4 h-4 text-gray-500' /> : <EyeOff className='w-4 h-4 text-gray-500' />}
+                                                        {showImageApiKey ? <Eye className='w-4 h-4 text-gray-500' /> : <EyeOff className='w-4 h-4 text-gray-500' />}
                                                     </button>
                                                 </div>
                                             </div>
@@ -990,7 +991,7 @@ const PresentonMode = ({ currentStep, setStep }: { currentStep: number, setStep:
                                         </label>
                                         <div className="relative">
                                             <input
-                                                type={showApiKey ? 'text' : 'password'}
+                                                type={showImageApiKey ? 'text' : 'password'}
                                                 placeholder={`Enter your ${provider.apiKeyFieldLabel}`}
                                                 className="w-full px-4 py-2.5 h-12 outline-none border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-colors"
                                                 value={getFieldValue(provider.apiKeyField)}
@@ -1005,10 +1006,10 @@ const PresentonMode = ({ currentStep, setStep }: { currentStep: number, setStep:
                                             />
                                             <button
                                                 type="button"
-                                                onClick={() => setShowApiKey((prev) => !prev)}
+                                                onClick={() => setShowImageApiKey((prev) => !prev)}
                                                 className='absolute right-2 top-1/2 -translate-y-1/2 bg-white px-2 py-1 cursor-pointer'
                                             >
-                                                {showApiKey ? <Eye className='w-4 h-4 text-gray-500' /> : <EyeOff className='w-4 h-4 text-gray-500' />}
+                                                {showImageApiKey ? <Eye className='w-4 h-4 text-gray-500' /> : <EyeOff className='w-4 h-4 text-gray-500' />}
                                             </button>
                                         </div>
 
