@@ -21,6 +21,18 @@ def set_custom_llm_url_env(value):
     os.environ["CUSTOM_LLM_URL"] = value
 
 
+def set_deepseek_base_url_env(value):
+    os.environ["DEEPSEEK_BASE_URL"] = value
+
+
+def set_deepseek_api_key_env(value):
+    os.environ["DEEPSEEK_API_KEY"] = value
+
+
+def set_deepseek_model_env(value):
+    os.environ["DEEPSEEK_MODEL"] = value
+
+
 def set_openai_api_key_env(value):
     os.environ["OPENAI_API_KEY"] = value
 
@@ -119,6 +131,26 @@ def set_openrouter_model_env(value):
 
 def set_openrouter_base_url_env(value):
     os.environ["OPENROUTER_BASE_URL"] = value
+
+
+def set_openrouter_provider_order_env(value):
+    os.environ["OPENROUTER_PROVIDER_ORDER"] = value
+
+
+def set_openrouter_allow_fallbacks_env(value):
+    os.environ["OPENROUTER_ALLOW_FALLBACKS"] = value
+
+
+def set_openrouter_require_parameters_env(value):
+    os.environ["OPENROUTER_REQUIRE_PARAMETERS"] = value
+
+
+def set_openrouter_data_collection_env(value):
+    os.environ["OPENROUTER_DATA_COLLECTION"] = value
+
+
+def set_openrouter_zdr_env(value):
+    os.environ["OPENROUTER_ZDR"] = value
 
 
 def set_fireworks_api_key_env(value):
@@ -225,9 +257,56 @@ def set_extended_reasoning_env(value):
     os.environ["EXTENDED_REASONING"] = value
 
 
+def set_llm_generation_profile_env(value):
+    os.environ["LLM_GENERATION_PROFILE"] = value
+
+
+def set_llm_max_output_tokens_env(value):
+    os.environ["LLM_MAX_OUTPUT_TOKENS"] = value
+
+
+def set_llm_reasoning_mode_env(value):
+    os.environ["LLM_REASONING_MODE"] = value
+
+
+def set_llm_reasoning_effort_env(value):
+    os.environ["LLM_REASONING_EFFORT"] = value
+
+
+def set_llm_reasoning_budget_tokens_env(value):
+    os.environ["LLM_REASONING_BUDGET_TOKENS"] = value
+
+
 def set_web_grounding_env(value):
     os.environ["WEB_GROUNDING"] = value
 
+
+def set_web_search_provider_env(value):
+    os.environ["WEB_SEARCH_PROVIDER"] = value
+
+
+def set_web_search_max_results_env(value):
+    os.environ["WEB_SEARCH_MAX_RESULTS"] = value
+
+
+def set_searxng_base_url_env(value):
+    os.environ["SEARXNG_BASE_URL"] = value
+
+
+def set_tavily_api_key_env(value):
+    os.environ["TAVILY_API_KEY"] = value
+
+
+def set_exa_api_key_env(value):
+    os.environ["EXA_API_KEY"] = value
+
+
+def set_brave_search_api_key_env(value):
+    os.environ["BRAVE_SEARCH_API_KEY"] = value
+
+
+def set_serper_api_key_env(value):
+    os.environ["SERPER_API_KEY"] = value
 
 def set_comfyui_url_env(value):
     os.environ["COMFYUI_URL"] = value

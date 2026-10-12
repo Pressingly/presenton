@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { LayoutDashboard, Star, Brain, Settings, Palette, HelpCircle } from "lucide-react";
+import { LayoutDashboard, Star, Brain, Settings, HelpCircle, UsersRound } from "lucide-react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 
@@ -11,27 +11,30 @@ export const defaultNavItems = [
     { key: "dashboard" as const, label: "Dashboard", icon: LayoutDashboard },
     { key: "templates" as const, label: "Standard", icon: Star },
     { key: "designs" as const, label: "Smart", icon: Brain },
+    { key: "community" as const, label: "Community", icon: UsersRound },
 
 
 
 ];
 export const BelongingNavItems = [
     { key: "settings" as const, label: "Settings", icon: Settings },
+    
 ]
 
-const DashboardSidebar = () => {
+type DashboardSidebarProps = {
+    showCommunity?: boolean;
+    showTemplates?: boolean;
+};
 
-
+const DashboardSidebar = ({
+    showCommunity = true,
+    showTemplates = true,
+}: DashboardSidebarProps) => {
     const pathname = usePathname();
-    const activeTab = pathname.split("?")[0].split("/").pop();
-
-
-
-
 
     return (
         <aside
-            className="sticky top-0 h-screen w-[115px] flex flex-col justify-between bg-[#F6F6F9] backdrop-blur border-r border-[#E1E1E5] px-4  py-8"
+            className="sticky top-0 flex h-screen w-[114px] shrink-0 flex-col justify-between border-r border-[#E1E1E5] bg-[#F6F6F9] px-4 py-8 backdrop-blur"
             aria-label="Dashboard sidebar"
         >
             <div>
@@ -58,7 +61,7 @@ const DashboardSidebar = () => {
                             <LayoutDashboard className={["h-4 w-4", pathname === "/dashboard" ? "text-[#5146E5]" : "text-slate-600"].join(" ")} />
                             <span className="text-[11px] text-slate-800">Dashboard</span>
                         </Link>
-                        <Link
+                        {showTemplates ? <Link
                             prefetch={false}
                             href={`/templates`}
                             className={[
@@ -72,8 +75,18 @@ const DashboardSidebar = () => {
                                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={`${pathname === "/templates" ? "#5146E5" : "#475569"}`} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4"><path d="M4 14h6" /><path d="M4 2h10" /><rect x="4" y="18" width="16" height="4" rx="1" /><rect x="4" y="6" width="16" height="4" rx="1" /></svg>
                                 <span className="text-[11px] text-slate-800">Templates</span>
                             </div>
-                        </Link>
-                        <Link
+                        </Link> : null}
+                        {showCommunity ? <Link
+                            prefetch={false}
+                            href="/community"
+                            className="flex flex-col items-center gap-2 text-center transition-colors"
+                            aria-label="Community"
+                            title="Community"
+                        >
+                            <UsersRound className={`h-4 w-4 ${pathname === "/community" ? "text-[#5146E5]" : "text-slate-600"}`} />
+                            <span className="text-[11px] text-slate-800">Community</span>
+                        </Link> : null}
+                        {/* <Link
                             prefetch={false}
                             href={`/theme`}
                             className={[
@@ -87,47 +100,28 @@ const DashboardSidebar = () => {
                                 <Palette className={`h-4 w-4 ${pathname === "/theme" ? "text-[#5146E5]" : "text-slate-600"}`} />
                                 <span className="text-[11px] text-slate-800">Themes</span>
                             </div>
-                        </Link>
+                        </Link> */}
                     </div>
                 </nav>
             </div>
 
-            <div className=" pt-5 border-t border-[#E1E1E5]  font-syne "
-            >
-                <div className="mb-4">
-
-                    <Link href="https://docs.presenton.ai/help" target="_blank" className="flex flex-col tex-center items-center gap-2  transition-colors"><HelpCircle className="w-4 h-4" /><span className="text-[11px] text-slate-800">Help</span></Link>
-                </div>
-                <div className="mb-4">
-
-                    <Link href="https://discord.com/invite/9ZsKKxudNE" target="_blank" className="flex flex-col tex-center items-center gap-2  transition-colors"><img src="/discord.png" alt="Discord" className="w-5 h-5 rounded-full object-cover border border-[#EDEEEF]" /><span className="text-[11px] text-slate-800">Community</span></Link>
-                </div>
-
-
-                {BelongingNavItems.map(({ key, label: itemLabel, icon: Icon }) => {
-                    const isActive = activeTab === key;
-                    return (
-                        <Link
-                            prefetch={false}
-                            key={key}
-                            href={`/${key}`}
-                            className={[
-                                "flex flex-col tex-center items-center gap-2  transition-colors ",
-                                isActive ? "" : "ring-transparent",
-                            ].join(" ")}
-                            aria-label={itemLabel}
-                            title={itemLabel}
-                        >
-                            {/* <div className="flex items-center  ">
-                                <img src={imageProviderIcon} alt="image provider" className="w-5 h-5 rounded-full object-cover border border-[#EDEEEF]" />
-                                <img src={textProviderIcon} alt="text provider" className="w-5 h-5 rounded-full object-cover border border-[#EDEEEF]" />
-                            </div> */}
-                            <Settings className={`h-4 w-4 ${isActive ? "text-[#5146E5]" : "text-slate-600"}`} />
-                            <span className="text-[11px] text-slate-800">{itemLabel}</span>
-                        </Link>
-                    );
-                })}
-
+            <div className="border-t border-[#E1E1E5] pt-5 font-syne">
+                  <Link
+                    href="/settings"
+                    className="flex flex-col items-center gap-2 transition-colors"
+                >
+                    <Settings className="h-4 w-4" />
+                    <span className="text-[11px] text-slate-800">Settings</span>
+                </Link>
+                <div className="py-2"/>
+                <Link
+                    href="https://docs.presenton.ai/help"
+                    target="_blank"
+                    className="flex flex-col items-center gap-2 transition-colors"
+                >
+                    <HelpCircle className="h-4 w-4" />
+                    <span className="text-[11px] text-slate-800">Help</span>
+                </Link>
             </div>
 
         </aside>
@@ -135,5 +129,3 @@ const DashboardSidebar = () => {
 };
 
 export default DashboardSidebar;
-
-

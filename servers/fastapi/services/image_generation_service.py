@@ -3,6 +3,9 @@ import base64
 import json
 import os
 import secrets
+from weakref import WeakKeyDictionary
+from urllib.parse import urlparse
+
 import aiohttp
 from fastapi import HTTPException
 from google import genai
@@ -19,6 +22,7 @@ from utils.get_env import (
     get_openai_compat_image_base_url_env,
     get_openai_compat_image_api_key_env,
     get_openai_compat_image_model_env,
+    is_parallel_image_generation_enabled,
 )
 from utils.get_env import get_pixabay_api_key_env
 from utils.get_env import get_comfyui_url_env
@@ -36,11 +40,41 @@ from utils.image_provider import (
     is_openai_compatible_selected,
 )
 from utils.asset_directory_utils import absolute_fastapi_asset_url
+from utils.image_generation_error import normalize_image_generation_error
 import uuid
 
 
+OPEN_WEBUI_API_PREFIX = "/api/v1"
 COMFYUI_MAX_SEED = 0xFFFFFFFFFFFFFFFF
 COMFYUI_SEED_SOURCE_VALUE_KEYS = {"value", "int", "integer", "number"}
+_IMAGE_GENERATION_LOCKS: WeakKeyDictionary[
+    asyncio.AbstractEventLoop, asyncio.Lock
+] = WeakKeyDictionary()
+
+
+def resolve_open_webui_api_base(base_url: str) -> str:
+    """Return the Open WebUI API root that the image endpoints hang off.
+
+    Open WebUI serves its REST API under ``/api/v1``; the site root only serves
+    the web app, which answers a POST to ``/images/generations`` with 405. A
+    bare origin such as ``http://127.0.0.1:8080`` therefore gets the prefix
+    appended. A URL that already carries a path is used verbatim so existing
+    configurations keep working.
+    """
+    base_url = base_url.strip().rstrip("/")
+    if urlparse(base_url).path in ("", "/"):
+        return base_url + OPEN_WEBUI_API_PREFIX
+    return base_url
+
+
+def _get_image_generation_lock() -> asyncio.Lock:
+    """Share one image request lock across presentation, editor, and chat services."""
+    loop = asyncio.get_running_loop()
+    lock = _IMAGE_GENERATION_LOCKS.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _IMAGE_GENERATION_LOCKS[loop] = lock
+    return lock
 
 
 class ImageGenerationService:
@@ -98,12 +132,11 @@ class ImageGenerationService:
         print(f"Request - Generating Image for {image_prompt}")
 
         try:
-            if self.is_stock_provider_selected():
-                image_path = await self.image_gen_func(image_prompt)
+            if is_parallel_image_generation_enabled():
+                image_path = await self._call_image_provider(image_prompt)
             else:
-                image_path = await self.image_gen_func(
-                    image_prompt, self.output_directory
-                )
+                async with _get_image_generation_lock():
+                    image_path = await self._call_image_provider(image_prompt)
             if image_path:
                 if image_path.startswith("http"):
                     return image_path
@@ -124,7 +157,15 @@ class ImageGenerationService:
 
         except Exception as e:
             print(f"Error generating image: {e}")
-            return absolute_fastapi_asset_url("/static/images/placeholder.jpg")
+            normalized_error = normalize_image_generation_error(e)
+            if normalized_error is e:
+                raise
+            raise normalized_error from e
+
+    async def _call_image_provider(self, image_prompt: str) -> str:
+        if self.is_stock_provider_selected():
+            return await self.image_gen_func(image_prompt)
+        return await self.image_gen_func(image_prompt, self.output_directory)
 
     async def generate_image_openai(
         self, prompt: str, output_directory: str, model: str, quality: str
@@ -170,10 +211,8 @@ class ImageGenerationService:
         if not base_url:
             raise ValueError("OPEN_WEBUI_IMAGE_URL environment variable is not set")
 
-        base_url = base_url.rstrip("/")
+        base_url = resolve_open_webui_api_base(base_url)
         api_key = get_open_webui_image_api_key_env() or ""
-
-        from urllib.parse import urlparse
 
         parsed = urlparse(base_url)
         origin = f"{parsed.scheme}://{parsed.netloc}"
@@ -198,8 +237,15 @@ class ImageGenerationService:
 
             if resp.status != 200:
                 error_text = await resp.text()
+                hint = ""
+                if resp.status in (404, 405):
+                    hint = (
+                        " (OPEN_WEBUI_IMAGE_URL should point at the Open WebUI"
+                        f" API root, e.g. {origin}{OPEN_WEBUI_API_PREFIX})"
+                    )
                 raise Exception(
-                    f"Open WebUI image generation returned {resp.status}: {error_text}"
+                    f"Open WebUI image generation returned {resp.status}: "
+                    f"{error_text}{hint}"
                 )
 
             body = await resp.json()
@@ -854,9 +900,19 @@ class ImageGenerationService:
                 f.write(base64.b64decode(item.b64_json))
         elif item.url:
             image_url = item.url
-            if image_url.startswith("/"):
+            is_relative_url = image_url.startswith("/")
+            if is_relative_url:
                 image_url = origin + image_url
-            headers = {"Authorization": f"Bearer {api_key}"}
+            image_origin = urlparse(image_url)
+            headers = {}
+            if (
+                is_relative_url
+                or (
+                    image_origin.scheme == parsed.scheme
+                    and image_origin.netloc == parsed.netloc
+                )
+            ):
+                headers["Authorization"] = f"Bearer {api_key}"
             async with aiohttp.ClientSession(trust_env=True) as session:
                 dl_resp = await session.get(
                     image_url,

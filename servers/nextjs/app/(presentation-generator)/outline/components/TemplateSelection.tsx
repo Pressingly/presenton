@@ -1,162 +1,202 @@
 "use client";
-import React, { useEffect, useMemo, useCallback, memo } from "react";
 
-import { TemplateLayoutsWithSettings } from "@/app/presentation-templates/utils";
-import { templates } from "@/app/presentation-templates";
-import { Card } from "@/components/ui/card";
-import { cn } from "@/lib/utils";
-import { CustomTemplates, useCustomTemplateSummaries } from "@/app/hooks/useCustomTemplates";
-import { Loader2 } from "lucide-react";
-
+import React, { memo, useEffect } from "react";
 import CreateCustomTemplate from "../../(dashboard)/templates/components/CreateCustomTemplate";
-import { CustomTemplateCard } from "./CustomTemplateCard";
+import { useTemplateSummaries } from "../../hooks/useTemplateSummaries";
 import {
-  TemplatePreviewStage,
-  LayoutsBadge,
-  InbuiltTemplatePreview,
-} from "../../components/TemplatePreviewComponents";
-
-const BuiltInTemplateCard = memo(function BuiltInTemplateCard({
-  template,
-  isSelected,
-  onSelect,
-}: {
-  template: TemplateLayoutsWithSettings;
-  isSelected: boolean;
-  onSelect: (template: TemplateLayoutsWithSettings) => void;
-}) {
-  const handleClick = useCallback(() => onSelect(template), [onSelect, template]);
-
-  return (
-    <Card
-      className={cn(
-        "cursor-pointer relative hover:shadow-sm transition-all duration-200 group overflow-hidden rounded-[22px] bg-white border",
-        isSelected
-          ? " border-blue-500 ring-2 ring-blue-500/25 shadow-sm"
-          : " border-[#E8E9EC]"
-      )}
-      onClick={handleClick}
-    >
-      <TemplatePreviewStage>
-        <LayoutsBadge count={template.layouts.length} />
-        <InbuiltTemplatePreview layouts={template.layouts} templateId={template.id} isOutline={true} />
-      </TemplatePreviewStage>
-      <div className="flex items-center justify-between px-6 py-5 bg-white border-t border-[#EDEEEF] relative z-40">
-        <div className="min-w-0 flex-1">
-          <h3 className="text-sm font-bold text-gray-900 capitalize font-syne">
-            {template.name}
-          </h3>
-          <p className="text-xs text-gray-600 line-clamp-2 font-syne">
-            {template.description}
-          </p>
-        </div>
-      </div>
-    </Card>
-  );
-});
+  TemplateListCard,
+  TemplateListLoadingState,
+  TemplateListEmptyState,
+  TemplateListSection,
+} from "../../components/TemplateListUi";
+import { MixpanelEvent, trackEvent } from "@/utils/mixpanel";
+import { useSelector } from "react-redux";
+import type { RootState } from "@/store/store";
 
 interface TemplateSelectionProps {
-  selectedTemplate: (TemplateLayoutsWithSettings | string) | null;
-  onSelectTemplate: (template: TemplateLayoutsWithSettings | string) => void;
+  presentationId: string | null;
+  selectedTemplateId: string | null;
+  suggestedTemplate?: string | null;
+  onSuggestedTemplateResolved?: (template: {
+    id: string;
+    name: string;
+    source: "default" | "custom";
+    position: number;
+  }) => void;
+  onSelectTemplate: (template: {
+    id: string;
+    name: string;
+    source: "default" | "custom";
+    position: number;
+  }) => void;
+  onCreateTemplate?: () => void;
 }
 
-const TemplateSelection: React.FC<TemplateSelectionProps> = memo(function TemplateSelection({
-  selectedTemplate,
-  onSelectTemplate,
-}) {
-  useEffect(() => {
-    const existingScript = document.querySelector(
-      'script[src*="tailwindcss.com"]'
+const normalizeTemplateName = (name: string) =>
+  name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-");
+
+const TemplateSelection: React.FC<TemplateSelectionProps> = memo(
+  function TemplateSelection({
+    presentationId,
+    selectedTemplateId,
+    suggestedTemplate,
+    onSuggestedTemplateResolved,
+    onSelectTemplate,
+    onCreateTemplate,
+  }) {
+    const presentonCloudOnly = useSelector(
+      (state: RootState) => state.userConfig.llm_config.LLM === "presenton"
     );
-    if (!existingScript) {
-      const script = document.createElement("script");
-      script.src = "https://cdn.tailwindcss.com";
-      script.async = true;
-      document.head.appendChild(script);
+    const { defaultTemplates, customTemplates, loading, error } =
+      useTemplateSummaries({ presentonCloudOnly });
+
+    useEffect(() => {
+      if (loading || !suggestedTemplate || selectedTemplateId) return;
+
+      const normalizedSuggestion = suggestedTemplate.trim().toLowerCase();
+      const candidates = [
+        ...defaultTemplates.map((template, position) => ({
+          template,
+          position,
+          source: "default" as const,
+        })),
+        ...customTemplates.map((template, position) => ({
+          template,
+          position,
+          source: "custom" as const,
+        })),
+      ];
+      const match = candidates.find(
+        ({ template }) =>
+          template.id === suggestedTemplate ||
+          normalizeTemplateName(template.name) === normalizedSuggestion
+      );
+
+      if (match) {
+        onSuggestedTemplateResolved?.({
+          id: match.template.id,
+          name: match.template.name,
+          source: match.source,
+          position: match.position,
+        });
+      }
+    }, [
+      customTemplates,
+      defaultTemplates,
+      loading,
+      onSuggestedTemplateResolved,
+      selectedTemplateId,
+      suggestedTemplate,
+    ]);
+
+    if (loading) {
+      return <TemplateListLoadingState />;
     }
-  }, []);
 
-  const { templates: customTemplates, loading: customLoading } = useCustomTemplateSummaries();
-
-  const handleCustomSelect = useCallback(
-    (template: TemplateLayoutsWithSettings | string) => onSelectTemplate(template),
-    [onSelectTemplate]
-  );
-
-  const handleBuiltInSelect = useCallback(
-    (template: TemplateLayoutsWithSettings) => onSelectTemplate(template),
-    [onSelectTemplate]
-  );
-
-  const selectedCustomId = useMemo(
-    () => (typeof selectedTemplate === "string" ? selectedTemplate : null),
-    [selectedTemplate]
-  );
-
-  const selectedBuiltInId = useMemo(
-    () => (typeof selectedTemplate !== "string" ? selectedTemplate?.id ?? null : null),
-    [selectedTemplate]
-  );
-
-  const customTemplateCards = useMemo(() => {
-    if (customLoading) {
+    if (error) {
       return (
-        <div className="flex items-center justify-center py-12 font-syne">
-          <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
-          <span className="ml-3 text-gray-600">Loading custom templates...</span>
-        </div>
+        <TemplateListEmptyState
+          message={`Templates could not be loaded: ${error}`}
+        />
       );
     }
-    if (customTemplates.length === 0) {
-      return (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          <CreateCustomTemplate />
-        </div>
-      );
-    }
-    return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-        {customTemplates.map((template: CustomTemplates) => (
-          <CustomTemplateCard
-            key={template.id}
-            template={template}
-            onSelectTemplate={handleCustomSelect}
-            selectedTemplate={selectedCustomId}
-          />
-        ))}
-      </div>
-    );
-  }, [customLoading, customTemplates, handleCustomSelect, selectedCustomId]);
 
-  const builtInTemplateCards = useMemo(
-    () =>
-      templates.map((template: TemplateLayoutsWithSettings) => (
-        <BuiltInTemplateCard
+    const renderTemplateCard = (
+      template: (typeof defaultTemplates)[number],
+      index: number,
+      source: "default" | "custom"
+    ) => {
+      const isSuggested = Boolean(
+        suggestedTemplate &&
+          (template.id === suggestedTemplate ||
+            normalizeTemplateName(template.name) ===
+              suggestedTemplate.trim().toLowerCase())
+      );
+
+      return (
+        <TemplateListCard
           key={template.id}
           template={template}
-          isSelected={selectedBuiltInId === template.id}
-          onSelect={handleBuiltInSelect}
+          isSelected={selectedTemplateId === template.id}
+          isSuggested={isSuggested}
+          showArrow
+          selectionPage
+          onClick={() => {
+            trackEvent(MixpanelEvent.TemplateV2_Template_Selected, {
+              presentation_id: presentationId,
+              template_id: template.id,
+              template_source: source,
+            });
+            onSelectTemplate({
+              id: template.id,
+              name: template.name,
+              source,
+              position: index,
+            });
+          }}
         />
-      )),
-    [selectedBuiltInId, handleBuiltInSelect]
-  );
+      );
+    };
 
-  return (
-    <div className="space-y-[30px] mb-4">
-      <div>
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-base font-semibold text-gray-900 font-syne">Custom</h3>
-        </div>
-        {customTemplateCards}
+    const suggestionNotice = suggestedTemplate && selectedTemplateId && (
+      <div className="mb-5 rounded-xl border border-[#E4E0FF] bg-[#F7F5FF] px-4 py-3 font-syne text-xs font-medium text-[#5141E5]">
+        <strong className="font-semibold">Suggested template selected.</strong>{" "}
+        Click the highlighted template to continue.
       </div>
-      <div>
-        <h3 className="text-base font-semibold text-gray-900 mb-3 font-syne">In Built</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {builtInTemplateCards}
+    );
+
+    if (customTemplates.length === 0) {
+      return (
+        <div className="mb-8">
+          {suggestionNotice}
+          <TemplateListSection label="Templates" selectionPage>
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {!presentonCloudOnly && (
+                <CreateCustomTemplate
+                  selectionPage
+                  onClick={onCreateTemplate}
+                />
+              )}
+              {defaultTemplates.map((template, index) =>
+                renderTemplateCard(template, index, "default")
+              )}
+            </div>
+          </TemplateListSection>
         </div>
+      );
+    }
+
+    return (
+      <div className="mb-8 space-y-[30px]">
+        {suggestionNotice}
+        <TemplateListSection label="Custom" selectionPage>
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {!presentonCloudOnly && (
+              <CreateCustomTemplate
+                selectionPage
+                onClick={onCreateTemplate}
+              />
+            )}
+            {customTemplates.map((template, index) =>
+              renderTemplateCard(template, index, "custom")
+            )}
+          </div>
+        </TemplateListSection>
+
+        <TemplateListSection label="Built-In" selectionPage>
+          {defaultTemplates.length === 0 ? (
+            <TemplateListEmptyState message="No built-in templates available." />
+          ) : (
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {defaultTemplates.map((template, index) =>
+                renderTemplateCard(template, index, "default")
+              )}
+            </div>
+          )}
+        </TemplateListSection>
       </div>
-    </div>
-  );
-});
+    );
+  }
+);
 
 export default TemplateSelection;

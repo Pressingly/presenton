@@ -1,12 +1,14 @@
 import asyncio
 import json
+import logging
 import traceback
 import uuid
 import dirtyjson
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from constants.presentation import MAX_NUMBER_OF_SLIDES
 from models.presentation_outline_model import PresentationOutlineModel
 from models.sql.presentation import PresentationModel
 from models.sse_response import (
@@ -26,28 +28,93 @@ from utils.outline_utils import (
     get_no_of_outlines_to_generate_for_n_slides,
     get_presentation_title_from_presentation_outline,
 )
+from utils.outline_limits import normalize_outline_payload
 from utils.llm_calls.generate_presentation_outlines import (
+    OutlineGenerationStatus,
     generate_ppt_outline,
     get_messages as get_outline_messages,
 )
+from utils.sse import safe_sse_stream
+from utils.web_search import get_selected_web_search_provider, get_web_search_route
 
 OUTLINES_ROUTER = APIRouter(prefix="/outlines", tags=["Outlines"])
+LOGGER = logging.getLogger(__name__)
+
+
+@OUTLINES_ROUTER.get("/{id}", response_model=PresentationOutlineModel)
+async def get_outline(
+    id: uuid.UUID,
+    sql_session: AsyncSession = Depends(get_async_session),
+):
+    presentation = await sql_session.get(PresentationModel, id)
+    if not presentation:
+        raise HTTPException(status_code=404, detail="Presentation not found")
+
+    if not presentation.outlines:
+        return PresentationOutlineModel(slides=[])
+
+    return PresentationOutlineModel(**presentation.outlines)
+
+
+@OUTLINES_ROUTER.put("/{id}", response_model=PresentationOutlineModel)
+async def update_outline(
+    id: uuid.UUID,
+    outline: PresentationOutlineModel,
+    sql_session: AsyncSession = Depends(get_async_session),
+):
+    presentation = await sql_session.get(PresentationModel, id)
+    if not presentation:
+        raise HTTPException(status_code=404, detail="Presentation not found")
+
+    presentation.outlines = outline.model_dump(mode="json")
+    presentation.n_slides = len(outline.slides)
+    presentation.title = get_presentation_title_from_presentation_outline(outline)
+
+    sql_session.add(presentation)
+    await sql_session.commit()
+
+    await MEM0_PRESENTATION_MEMORY_SERVICE.store_generated_outlines(
+        presentation.id,
+        presentation.outlines,
+    )
+
+    return outline
 
 
 @OUTLINES_ROUTER.get("/stream/{id}")
 async def stream_outlines(
-    id: uuid.UUID, sql_session: AsyncSession = Depends(get_async_session)
+    id: uuid.UUID,
+    request: Request,
+    sql_session: AsyncSession = Depends(get_async_session),
 ):
     presentation = await sql_session.get(PresentationModel, id)
 
     if not presentation:
         raise HTTPException(status_code=404, detail="Presentation not found")
 
+    search_route, actual_search_provider = get_web_search_route()
+    LOGGER.info(
+        "Starting outline stream: presentation_id=%s web_search_enabled=%s "
+        "selected_web_search_provider=%s web_search_route=%s actual_web_search_provider=%s",
+        presentation.id,
+        presentation.web_search,
+        get_selected_web_search_provider().value,
+        search_route,
+        (
+            actual_search_provider.value
+            if actual_search_provider
+            else ("model-native" if search_route == "native" else "none")
+        ),
+    )
+
     temp_dir = TEMP_FILE_SERVICE.create_temp_dir()
 
     async def inner():
+        if await request.is_disconnected():
+            return
+
         yield SSEStatusResponse(
-            status="Generating presentation outlines..."
+            status="Preparing your presentation outline"
         ).to_string()
 
         additional_context = ""
@@ -111,9 +178,20 @@ async def stream_outlines(
             presentation.include_title_slide,
             presentation.web_search,
             presentation.include_table_of_contents,
+            emit_statuses=True,
+            disconnect_checker=request.is_disconnected,
         ):
             # Give control to the event loop
             await asyncio.sleep(0)
+
+            if isinstance(chunk, OutlineGenerationStatus):
+                LOGGER.info(
+                    "Outline generation status: presentation_id=%s status=%s",
+                    presentation.id,
+                    chunk.message,
+                )
+                yield SSEStatusResponse(status=chunk.message).to_string()
+                continue
 
             if isinstance(chunk, HTTPException):
                 yield SSEErrorResponse(detail=chunk.detail).to_string()
@@ -137,11 +215,19 @@ async def stream_outlines(
             ).to_string()
             return
 
-        presentation_outlines = PresentationOutlineModel(**presentation_outlines_json)
+        presentation_outlines = PresentationOutlineModel(
+            **normalize_outline_payload(
+                presentation_outlines_json,
+                MAX_NUMBER_OF_SLIDES,
+            )
+        )
 
+        # Only undershooting is fatal. Overshooting is trimmed just below --
+        # the slice was already here, unreachable for that case because this
+        # check rejected the request first.
         if (
             n_slides_to_generate is not None
-            and len(presentation_outlines.slides) != n_slides_to_generate
+            and len(presentation_outlines.slides) < n_slides_to_generate
         ):
             yield SSEErrorResponse(
                 detail=(
@@ -176,4 +262,15 @@ async def stream_outlines(
             key="presentation", value=presentation.model_dump(mode="json")
         ).to_string()
 
-    return StreamingResponse(inner(), media_type="text/event-stream")
+    async def rollback_stream_session():
+        await sql_session.rollback()
+
+    return StreamingResponse(
+        safe_sse_stream(
+            inner(),
+            logger=LOGGER,
+            error_detail="Failed to generate presentation outlines. Please try again.",
+            on_error=rollback_stream_session,
+        ),
+        media_type="text/event-stream",
+    )

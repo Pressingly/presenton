@@ -5,7 +5,7 @@ import * as z from "zod";
 import {
   IconSchema as BuiltinIconSchema,
   ImageSchema as BuiltinImageSchema,
-} from "@/app/presentation-templates/defaultSchemes";
+} from "@/lib/default-schemes";
 
 export type CompiledTemplateSchema = {
   layoutDescription: string;
@@ -21,7 +21,7 @@ type ExtractedDeclaration = {
   order: number;
 };
 
-/** Imported from `defaultSchemes`; not always present as `const` in layout source. */
+/** Imported from `default-schemes`; not always present as `const` in layout source. */
 const BUILTIN_SHARED_SCHEMA_IDENTIFIERS = new Set(["ImageSchema", "IconSchema"]);
 
 const DANGEROUS_MEMBER_NAMES = new Set([
@@ -40,7 +40,7 @@ const DANGEROUS_MEMBER_NAMES = new Set([
 
 function normalizeHardcodedBackendUrlsInCode(layoutCode: string): string {
   return layoutCode.replace(
-    /https?:\/\/(?:127\.0\.0\.1|localhost|0\.0\.0\.0):(?:8000|5000)(?=\/(?:app_data|static)\/)/g,
+    /https?:\/\/(?:127\.0\.0\.1|localhost|0\.0\.0\.0):(?:8000|5000|5001)(?=\/(?:app_data|static)\/)/g,
     ""
   );
 }

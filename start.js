@@ -2,8 +2,9 @@
 
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import { randomUUID } from "crypto";
+import { request } from "http";
 import {
   chmodSync,
   closeSync,
@@ -19,6 +20,9 @@ import {
   writeFileSync,
 } from "fs";
 import { printPresentonStartupBanner } from "./scripts/presenton-terminal-banner.mjs";
+import userConfigEnv from "./scripts/user-config-env.cjs";
+
+const { buildUserConfigFromEnv, readUserConfigEnv } = userConfigEnv;
 
 process.umask(0o022);
 
@@ -28,7 +32,10 @@ const __dirname = dirname(__filename);
 const fastapiDir = join(__dirname, "servers/fastapi");
 const nextjsDir = join(__dirname, "servers/nextjs");
 const nextjsStandaloneServer = join(nextjsDir, "server.js");
+const nextjsCli = join(nextjsDir, "node_modules/next/dist/bin/next");
 const exportSyncScript = join(__dirname, "scripts/sync-presentation-export.cjs");
+const nginxSourceConfigPath = join(__dirname, "nginx.conf");
+const nginxRuntimeConfigPath = "/etc/nginx/nginx.conf";
 
 const args = process.argv.slice(2);
 const hasDevArg = args.includes("--dev") || args.includes("-d");
@@ -38,8 +45,6 @@ const canChangeKeys = process.env.CAN_CHANGE_KEYS !== "false";
 const fastapiPort = 8000;
 const nextjsPort = 3000;
 const appmcpPort = 8001;
-/** Must match `listen` in nginx.conf (public HTTP inside the container). */
-const nginxListenPort = 80;
 
 const appDataDirectory = process.env.APP_DATA_DIRECTORY;
 if (!appDataDirectory) {
@@ -55,12 +60,29 @@ const appDataStaticDirectories = [
   "images",
   "uploads",
   "fonts",
+  "templates",
   "pptx-to-html",
+  "pptx-to-json",
 ].map((name) => join(appDataDirectory, name));
+
+// Volumes mounted by the host (e.g. a Kubernetes/OpenShift PVC owned by an
+// arbitrary non-root UID) may already have sufficient permissions without
+// letting this process chmod them. Treat chmod as best-effort so a restricted
+// environment doesn't crash the whole process on startup.
+const chmodBestEffort = (path, mode) => {
+  try {
+    chmodSync(path, mode);
+  } catch (error) {
+    if (error && (error.code === "EPERM" || error.code === "EACCES")) {
+      return;
+    }
+    throw error;
+  }
+};
 
 const ensureReadableDirectory = (dirPath) => {
   mkdirSync(dirPath, { recursive: true, mode: appDataDirectoryMode });
-  chmodSync(dirPath, appDataDirectoryMode);
+  chmodBestEffort(dirPath, appDataDirectoryMode);
 };
 
 const ensureReadableExportFiles = (dirPath) => {
@@ -68,10 +90,10 @@ const ensureReadableExportFiles = (dirPath) => {
     const entryPath = join(dirPath, entry.name);
 
     if (entry.isDirectory()) {
-      chmodSync(entryPath, appDataDirectoryMode);
+      chmodBestEffort(entryPath, appDataDirectoryMode);
       ensureReadableExportFiles(entryPath);
     } else if (entry.isFile()) {
-      chmodSync(entryPath, 0o644);
+      chmodBestEffort(entryPath, 0o644);
     }
   }
 };
@@ -111,7 +133,7 @@ const copyUserConfigBackup = () => {
   try {
     if (readJsonConfig(userConfigPath)) {
       copyFileSync(userConfigPath, userConfigBackupPath);
-      chmodSync(userConfigBackupPath, 0o644);
+      chmodBestEffort(userConfigBackupPath, 0o644);
     }
   } catch (error) {
     console.warn("Failed to update user config backup:", error);
@@ -133,10 +155,6 @@ const writeUserConfig = (config) => {
 
   try {
     renameSync(tempPath, userConfigPath);
-    chmodSync(userConfigPath, 0o644);
-    if (!existsSync(userConfigBackupPath)) {
-      copyUserConfigBackup();
-    }
   } catch (error) {
     try {
       unlinkSync(tempPath);
@@ -144,6 +162,11 @@ const writeUserConfig = (config) => {
       // Best-effort cleanup.
     }
     throw error;
+  }
+
+  chmodBestEffort(userConfigPath, 0o644);
+  if (!existsSync(userConfigBackupPath)) {
+    copyUserConfigBackup();
   }
 };
 
@@ -202,51 +225,222 @@ const runNodeScript = (scriptPath, scriptArgs) => {
   });
 };
 
-const forwardProcessOutput = (stream, target, onChunk) => {
+const canLoadSharp = () => {
+  const result = spawnSync(process.execPath, ["-e", "require('sharp')"], {
+    cwd: __dirname,
+    env: process.env,
+    encoding: "utf8",
+  });
+  return result.status === 0;
+};
+
+const ensurePresentationExportNodeDependencies = async () => {
+  if (canLoadSharp()) {
+    return;
+  }
+
+  console.warn(
+    "Sharp native dependency is missing for this container platform. Repairing root node_modules..."
+  );
+  await runCommand(
+    "npm",
+    ["install", "--include=optional", "--omit=dev", "--no-fund", "--no-audit"],
+    { cwd: __dirname }
+  );
+
+  if (!canLoadSharp()) {
+    throw new Error(
+      "Sharp still cannot be loaded after npm install. Recreate Docker volumes with `docker compose down -v` and rebuild the development service."
+    );
+  }
+};
+
+const shouldSuppressStartupLogLine = (line) =>
+  [
+    /\bUvicorn running on\b/i,
+    /https?:\/\/(?:127\.0\.0\.1|localhost|0\.0\.0\.0):(3000|8000)\b/i,
+    /started server on .*:(3000|8000)\b/i,
+  ].some((pattern) => pattern.test(line));
+
+const forwardProcessOutput = (
+  stream,
+  target,
+  { suppressStartupUrls = false } = {}
+) => {
   if (!stream) {
     return;
   }
+  let buffered = "";
+
+  const writeLine = (line, ending = "\n") => {
+    if (!suppressStartupUrls || !shouldSuppressStartupLogLine(line)) {
+      target.write(line + ending);
+    }
+  };
+
   stream.on("data", (chunk) => {
-    const text = chunk.toString();
-    target.write(text);
-    onChunk?.(text);
+    buffered += chunk.toString();
+    const lines = buffered.split(/\r?\n/);
+    buffered = lines.pop() ?? "";
+    for (const line of lines) {
+      writeLine(line);
+    }
+  });
+
+  stream.on("end", () => {
+    if (buffered) {
+      writeLine(buffered, "");
+      buffered = "";
+    }
   });
 };
 
-const waitForProcessReady = (processName, childProcess, readinessRegexes = []) => {
-  if (readinessRegexes.length === 0) {
-    return Promise.resolve();
-  }
-
+const waitForProcessOutputLine = (processName, childProcess, readinessRegexes) => {
   return new Promise((resolve, reject) => {
-    let isReady = false;
+    let isSettled = false;
+    const buffers = new Map();
 
-    const markReady = (text) => {
-      if (isReady) {
+    const settle = (callback, value) => {
+      if (isSettled) {
         return;
       }
-      if (readinessRegexes.some((regex) => regex.test(text))) {
-        isReady = true;
-        resolve();
+      isSettled = true;
+      callback(value);
+    };
+
+    const inspectLine = (line) => {
+      if (
+        !isSettled &&
+        readinessRegexes.some((readinessRegex) => readinessRegex.test(line))
+      ) {
+        settle(resolve);
       }
     };
 
-    forwardProcessOutput(childProcess.stdout, process.stdout, markReady);
-    forwardProcessOutput(childProcess.stderr, process.stderr, markReady);
+    const inspectStream = (stream) => {
+      if (!stream) {
+        return;
+      }
+      buffers.set(stream, "");
+      stream.on("data", (chunk) => {
+        const buffered = buffers.get(stream) + chunk.toString();
+        const lines = buffered.split(/\r?\n/);
+        buffers.set(stream, lines.pop() ?? "");
+        for (const line of lines) {
+          inspectLine(line);
+        }
+      });
+      stream.on("end", () => {
+        const buffered = buffers.get(stream);
+        if (buffered) {
+          inspectLine(buffered);
+        }
+      });
+    };
+
+    inspectStream(childProcess.stdout);
+    inspectStream(childProcess.stderr);
 
     childProcess.on("exit", (code) => {
-      if (!isReady) {
-        reject(
+      if (!isSettled) {
+        settle(
+          reject,
           new Error(`${processName} exited before reporting ready (exit code: ${code})`)
         );
       }
     });
 
     childProcess.on("error", (err) => {
-      if (!isReady) {
-        reject(err);
+      if (!isSettled) {
+        settle(reject, err);
       }
     });
+  });
+};
+
+const waitForProcessHttp = (
+  processName,
+  childProcess,
+  port,
+  path,
+  host = "127.0.0.1",
+  timeoutMs = 60_000
+) => {
+  return new Promise((resolve, reject) => {
+    let isSettled = false;
+    let retryTimer;
+    const deadline = Date.now() + timeoutMs;
+
+    const settle = (callback, value) => {
+      if (isSettled) {
+        return;
+      }
+      isSettled = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
+      callback(value);
+    };
+
+    const retry = () => {
+      if (Date.now() >= deadline) {
+        settle(
+          reject,
+          new Error(
+            `${processName} did not respond at http://${host}:${port}${path} within ${timeoutMs}ms`
+          )
+        );
+        return;
+      }
+      retryTimer = setTimeout(checkHttp, 250);
+    };
+
+    const checkHttp = () => {
+      let handled = false;
+      const req = request(
+        { host, port, path, method: "GET", timeout: 1_000 },
+        (response) => {
+          response.resume();
+          finishAttempt(true);
+        }
+      );
+
+      const finishAttempt = (isReady) => {
+        if (handled) {
+          return;
+        }
+        handled = true;
+        req.destroy();
+        if (isReady) {
+          settle(resolve);
+        } else if (!isSettled) {
+          retry();
+        }
+      };
+
+      req.once("error", () => finishAttempt(false));
+      req.once("timeout", () => finishAttempt(false));
+      req.end();
+    };
+
+    childProcess.on("exit", (code) => {
+      if (!isSettled) {
+        settle(
+          reject,
+          new Error(
+            `${processName} exited before responding at http://${host}:${port}${path} (exit code: ${code})`
+          )
+        );
+      }
+    });
+
+    childProcess.on("error", (err) => {
+      if (!isSettled) {
+        settle(reject, err);
+      }
+    });
+
+    checkHttp();
   });
 };
 
@@ -300,6 +494,19 @@ const ensurePresentationExportRuntime = async () => {
   }
 };
 
+const syncNginxConfigForDev = () => {
+  if (!isDev || !existsSync(nginxSourceConfigPath)) {
+    return;
+  }
+
+  try {
+    copyFileSync(nginxSourceConfigPath, nginxRuntimeConfigPath);
+    console.log("Synced nginx config from development bind mount");
+  } catch (error) {
+    console.warn("Failed to sync development nginx config:", error);
+  }
+};
+
 process.env.USER_CONFIG_PATH = userConfigPath;
 // Let Next.js middleware reach FastAPI over the loopback interface inside the
 // container without having to bounce through nginx (the host-facing port is
@@ -310,183 +517,122 @@ if (!process.env.FAST_API_INTERNAL_URL) {
 
 //? UserConfig is only setup if API Keys can be changed
 const setupUserConfigFromEnv = () => {
-  let existingConfig = readUserConfig();
-
-  if (!["ollama", "openai", "google", "vertex", "azure", "bedrock", "openrouter", "fireworks", "together", "cerebras", "anthropic", "litellm", "lmstudio", "custom", "codex"].includes(existingConfig.LLM)) {
-    existingConfig.LLM = undefined;
+  const existingConfig = readUserConfig();
+  const envConfig = readUserConfigEnv(process.env);
+  if (Object.keys(existingConfig).length > 0 && Object.keys(envConfig).length === 0) {
+    return;
   }
-
-  const envValue = (key) => {
-    const value = process.env[key];
-    return value === undefined || value === "" ? undefined : value;
-  };
-
-  const configValue = (key) => envValue(key) ?? existingConfig[key];
-
-  const parseBooleanLike = (value) => {
-    if (typeof value === "boolean") {
-      return value;
-    }
-    if (typeof value !== "string") {
-      return undefined;
-    }
-
-    const normalized = value.trim().toLowerCase();
-    if (["1", "true", "yes", "on"].includes(normalized)) {
-      return true;
-    }
-    if (["0", "false", "no", "off"].includes(normalized)) {
-      return false;
-    }
-    return undefined;
-  };
-
-  const normalizeImageConfig = (config) => {
-    const parsedDisableImageGeneration = parseBooleanLike(
-      config.DISABLE_IMAGE_GENERATION
-    );
-    if (parsedDisableImageGeneration !== undefined) {
-      config.DISABLE_IMAGE_GENERATION = parsedDisableImageGeneration;
-    }
-
-    if (config.DISABLE_IMAGE_GENERATION || config.IMAGE_PROVIDER) {
-      return config;
-    }
-
-    if (
-      config.OPENAI_COMPAT_IMAGE_BASE_URL &&
-      config.OPENAI_COMPAT_IMAGE_API_KEY &&
-      config.OPENAI_COMPAT_IMAGE_MODEL
-    ) {
-      config.IMAGE_PROVIDER = "openai_compatible";
-    } else if (config.OPEN_WEBUI_IMAGE_URL) {
-      config.IMAGE_PROVIDER = "open_webui";
-    } else if (config.COMFYUI_URL) {
-      config.IMAGE_PROVIDER = "comfyui";
-    } else if (config.PEXELS_API_KEY) {
-      config.IMAGE_PROVIDER = "pexels";
-    } else if (config.PIXABAY_API_KEY) {
-      config.IMAGE_PROVIDER = "pixabay";
-    } else if (config.LLM === "openai" && config.OPENAI_API_KEY) {
-      config.IMAGE_PROVIDER = "gpt-image-1.5";
-      config.GPT_IMAGE_1_5_QUALITY = config.GPT_IMAGE_1_5_QUALITY || "medium";
-    } else if (config.LLM === "google" && config.GOOGLE_API_KEY) {
-      config.IMAGE_PROVIDER = "gemini_flash";
-    } else {
-      config.DISABLE_IMAGE_GENERATION = true;
-    }
-
-    return config;
-  };
-
-  const userConfig = {
-    LLM: process.env.LLM || existingConfig.LLM,
-    OPENAI_API_KEY: process.env.OPENAI_API_KEY || existingConfig.OPENAI_API_KEY,
-    OPENAI_MODEL: process.env.OPENAI_MODEL || existingConfig.OPENAI_MODEL,
-    GOOGLE_API_KEY: process.env.GOOGLE_API_KEY || existingConfig.GOOGLE_API_KEY,
-    GOOGLE_MODEL: process.env.GOOGLE_MODEL || existingConfig.GOOGLE_MODEL,
-    VERTEX_API_KEY: process.env.VERTEX_API_KEY || existingConfig.VERTEX_API_KEY,
-    VERTEX_MODEL: process.env.VERTEX_MODEL || existingConfig.VERTEX_MODEL,
-    VERTEX_PROJECT: process.env.VERTEX_PROJECT || existingConfig.VERTEX_PROJECT,
-    VERTEX_LOCATION: process.env.VERTEX_LOCATION || existingConfig.VERTEX_LOCATION,
-    VERTEX_BASE_URL: process.env.VERTEX_BASE_URL || existingConfig.VERTEX_BASE_URL,
-    AZURE_OPENAI_API_KEY:
-      process.env.AZURE_OPENAI_API_KEY || existingConfig.AZURE_OPENAI_API_KEY,
-    AZURE_OPENAI_MODEL:
-      process.env.AZURE_OPENAI_MODEL || existingConfig.AZURE_OPENAI_MODEL,
-    AZURE_OPENAI_ENDPOINT:
-      process.env.AZURE_OPENAI_ENDPOINT || existingConfig.AZURE_OPENAI_ENDPOINT,
-    AZURE_OPENAI_BASE_URL:
-      process.env.AZURE_OPENAI_BASE_URL || existingConfig.AZURE_OPENAI_BASE_URL,
-    AZURE_OPENAI_API_VERSION:
-      process.env.AZURE_OPENAI_API_VERSION || existingConfig.AZURE_OPENAI_API_VERSION,
-    AZURE_OPENAI_DEPLOYMENT:
-      process.env.AZURE_OPENAI_DEPLOYMENT || existingConfig.AZURE_OPENAI_DEPLOYMENT,
-    BEDROCK_REGION: process.env.BEDROCK_REGION || existingConfig.BEDROCK_REGION,
-    BEDROCK_API_KEY: process.env.BEDROCK_API_KEY || existingConfig.BEDROCK_API_KEY,
-    BEDROCK_AWS_ACCESS_KEY_ID:
-      process.env.BEDROCK_AWS_ACCESS_KEY_ID || existingConfig.BEDROCK_AWS_ACCESS_KEY_ID,
-    BEDROCK_AWS_SECRET_ACCESS_KEY:
-      process.env.BEDROCK_AWS_SECRET_ACCESS_KEY || existingConfig.BEDROCK_AWS_SECRET_ACCESS_KEY,
-    BEDROCK_AWS_SESSION_TOKEN:
-      process.env.BEDROCK_AWS_SESSION_TOKEN || existingConfig.BEDROCK_AWS_SESSION_TOKEN,
-    BEDROCK_PROFILE_NAME:
-      process.env.BEDROCK_PROFILE_NAME || existingConfig.BEDROCK_PROFILE_NAME,
-    BEDROCK_MODEL: process.env.BEDROCK_MODEL || existingConfig.BEDROCK_MODEL,
-    FIREWORKS_API_KEY: process.env.FIREWORKS_API_KEY || existingConfig.FIREWORKS_API_KEY,
-    FIREWORKS_MODEL: process.env.FIREWORKS_MODEL || existingConfig.FIREWORKS_MODEL,
-    FIREWORKS_BASE_URL: process.env.FIREWORKS_BASE_URL || existingConfig.FIREWORKS_BASE_URL,
-    TOGETHER_API_KEY: process.env.TOGETHER_API_KEY || existingConfig.TOGETHER_API_KEY,
-    TOGETHER_MODEL: process.env.TOGETHER_MODEL || existingConfig.TOGETHER_MODEL,
-    TOGETHER_BASE_URL: process.env.TOGETHER_BASE_URL || existingConfig.TOGETHER_BASE_URL,
-    OLLAMA_URL: process.env.OLLAMA_URL || existingConfig.OLLAMA_URL,
-    OLLAMA_MODEL: process.env.OLLAMA_MODEL || existingConfig.OLLAMA_MODEL,
-    ANTHROPIC_API_KEY:
-      process.env.ANTHROPIC_API_KEY || existingConfig.ANTHROPIC_API_KEY,
-    ANTHROPIC_MODEL:
-      process.env.ANTHROPIC_MODEL || existingConfig.ANTHROPIC_MODEL,
-    CUSTOM_LLM_URL: process.env.CUSTOM_LLM_URL || existingConfig.CUSTOM_LLM_URL,
-    CUSTOM_LLM_API_KEY:
-      process.env.CUSTOM_LLM_API_KEY || existingConfig.CUSTOM_LLM_API_KEY,
-    CUSTOM_MODEL: process.env.CUSTOM_MODEL || existingConfig.CUSTOM_MODEL,
-    LITELLM_BASE_URL: process.env.LITELLM_BASE_URL || existingConfig.LITELLM_BASE_URL,
-    LITELLM_API_KEY: process.env.LITELLM_API_KEY || existingConfig.LITELLM_API_KEY,
-    LITELLM_MODEL: process.env.LITELLM_MODEL || existingConfig.LITELLM_MODEL,
-    LMSTUDIO_BASE_URL: process.env.LMSTUDIO_BASE_URL || existingConfig.LMSTUDIO_BASE_URL,
-    LMSTUDIO_API_KEY: process.env.LMSTUDIO_API_KEY || existingConfig.LMSTUDIO_API_KEY,
-    LMSTUDIO_MODEL: process.env.LMSTUDIO_MODEL || existingConfig.LMSTUDIO_MODEL,
-    PEXELS_API_KEY: process.env.PEXELS_API_KEY || existingConfig.PEXELS_API_KEY,
-    PIXABAY_API_KEY:
-      process.env.PIXABAY_API_KEY || existingConfig.PIXABAY_API_KEY,
-    IMAGE_PROVIDER: process.env.IMAGE_PROVIDER || existingConfig.IMAGE_PROVIDER,
-    DISABLE_IMAGE_GENERATION:
-      configValue("DISABLE_IMAGE_GENERATION") ?? existingConfig.DISABLE_IMAGE_GENERATION,
-    DISABLE_THINKING:
-      process.env.DISABLE_THINKING || existingConfig.DISABLE_THINKING,
-    EXTENDED_REASONING:
-      process.env.EXTENDED_REASONING || existingConfig.EXTENDED_REASONING,
-    WEB_GROUNDING: process.env.WEB_GROUNDING || existingConfig.WEB_GROUNDING,
-    USE_CUSTOM_URL: process.env.USE_CUSTOM_URL || existingConfig.USE_CUSTOM_URL,
-    COMFYUI_URL: process.env.COMFYUI_URL || existingConfig.COMFYUI_URL,
-    COMFYUI_WORKFLOW:
-      process.env.COMFYUI_WORKFLOW || existingConfig.COMFYUI_WORKFLOW,
-    DALL_E_3_QUALITY:
-      process.env.DALL_E_3_QUALITY || existingConfig.DALL_E_3_QUALITY,
-    GPT_IMAGE_1_5_QUALITY:
-      process.env.GPT_IMAGE_1_5_QUALITY || existingConfig.GPT_IMAGE_1_5_QUALITY,
-    CODEX_MODEL: process.env.CODEX_MODEL || existingConfig.CODEX_MODEL,
-    CODEX_ACCESS_TOKEN: existingConfig.CODEX_ACCESS_TOKEN,
-    CODEX_REFRESH_TOKEN: existingConfig.CODEX_REFRESH_TOKEN,
-    CODEX_TOKEN_EXPIRES: existingConfig.CODEX_TOKEN_EXPIRES,
-    CODEX_ACCOUNT_ID: existingConfig.CODEX_ACCOUNT_ID,
-    AUTH_USERNAME: existingConfig.AUTH_USERNAME,
-    AUTH_PASSWORD_HASH: existingConfig.AUTH_PASSWORD_HASH,
-    AUTH_SECRET_KEY: existingConfig.AUTH_SECRET_KEY,
-  };
-
-  writeFileSync(userConfigPath, JSON.stringify(normalizeImageConfig(userConfig)));
+  writeUserConfig(buildUserConfigFromEnv(existingConfig, process.env));
 };
 
 const startServers = async (nginxReadyPromise) => {
-  const fastApiProcess = spawn(
-    "python",
-    [
-      "server.py",
-      "--port",
-      fastapiPort.toString(),
-      "--reload",
-      isDev ? "true" : "false",
-    ],
-    {
-      cwd: fastapiDir,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
-    }
-  );
+  const managedProcesses = new Set();
+  let isShuttingDown = false;
 
-  fastApiProcess.on("error", (err) => {
-    console.error("FastAPI process failed to start:", err);
-  });
+  const shutdown = (exitCode) => {
+    if (isShuttingDown) {
+      return;
+    }
+    isShuttingDown = true;
+
+    for (const childProcess of managedProcesses) {
+      if (!childProcess.killed) {
+        childProcess.kill();
+      }
+    }
+
+    process.exit(exitCode);
+  };
+
+  process.once("SIGINT", () => shutdown(0));
+  process.once("SIGTERM", () => shutdown(0));
+
+  const spawnFastApiProcess = (stdio = ["ignore", "pipe", "pipe"]) =>
+    spawn(
+      "python",
+      [
+        "server.py",
+        "--port",
+        fastapiPort.toString(),
+        "--reload",
+        isDev ? "true" : "false",
+      ],
+      {
+        cwd: fastapiDir,
+        stdio,
+        env: process.env,
+      }
+    );
+
+  const spawnNextjsProcess = (stdio = ["ignore", "pipe", "pipe"]) => {
+    const useStandaloneNextjs = !isDev && existsSync(nextjsStandaloneServer);
+    return spawn(
+      process.execPath,
+      useStandaloneNextjs
+        ? [nextjsStandaloneServer]
+        : [
+            nextjsCli,
+            isDev ? "dev" : "start",
+            ...(isDev ? ["--webpack"] : []),
+            "-H",
+            "127.0.0.1",
+            "-p",
+            nextjsPort.toString(),
+          ],
+      {
+        cwd: nextjsDir,
+        stdio,
+        env:
+          useStandaloneNextjs
+            ? {
+                ...process.env,
+                HOSTNAME: "127.0.0.1",
+                PORT: nextjsPort.toString(),
+              }
+            : process.env,
+      }
+    );
+  };
+
+  const watchManagedProcess = (name, childProcess, restart) => {
+    managedProcesses.add(childProcess);
+
+    childProcess.on("error", (err) => {
+      console.error(`${name} process failed to start:`, err);
+    });
+
+    childProcess.on("exit", (code, signal) => {
+      managedProcesses.delete(childProcess);
+      if (isShuttingDown) {
+        return;
+      }
+
+      const exitCode = typeof code === "number" ? code : signal ? 1 : 0;
+      if (isDev && exitCode === 0 && restart) {
+        console.warn(`${name} exited cleanly; restarting it for development.`);
+        setTimeout(() => {
+          if (!isShuttingDown) {
+            restart();
+          }
+        }, 1000);
+        return;
+      }
+
+      console.error(
+        `${name} process exited. Exit code: ${exitCode}${
+          signal ? `, signal: ${signal}` : ""
+        }`
+      );
+      shutdown(exitCode);
+    });
+  };
+
+  let fastApiProcess = spawnFastApiProcess();
+  const restartFastApi = () => {
+    fastApiProcess = spawnFastApiProcess(["ignore", "inherit", "inherit"]);
+    watchManagedProcess("FastAPI", fastApiProcess, restartFastApi);
+  };
+  watchManagedProcess("FastAPI", fastApiProcess, restartFastApi);
 
   const appmcpProcess = spawn(
     "python",
@@ -502,54 +648,44 @@ const startServers = async (nginxReadyPromise) => {
     console.error("App MCP process failed to start:", err);
   });
 
-  const useStandaloneNextjs = !isDev && existsSync(nextjsStandaloneServer);
+  let nextjsProcess = spawnNextjsProcess();
+  const restartNextjs = () => {
+    nextjsProcess = spawnNextjsProcess(["ignore", "inherit", "inherit"]);
+    watchManagedProcess("Next.js", nextjsProcess, restartNextjs);
+  };
+  watchManagedProcess("Next.js", nextjsProcess, restartNextjs);
 
-  const nextjsProcess = spawn(
-    useStandaloneNextjs ? process.execPath : "npm",
-    useStandaloneNextjs
-      ? [nextjsStandaloneServer]
-      : [
-          "run",
-          isDev ? "dev" : "start",
-          "--",
-          "-H",
-          "127.0.0.1",
-          "-p",
-          nextjsPort.toString(),
-        ],
-    {
-      cwd: nextjsDir,
-      stdio: ["ignore", "pipe", "pipe"],
-      env:
-        useStandaloneNextjs
-          ? {
-              ...process.env,
-              HOSTNAME: "127.0.0.1",
-              PORT: nextjsPort.toString(),
-            }
-          : process.env,
-    }
-  );
+  const nextjsReadyPromise = waitForProcessOutputLine("Next.js", nextjsProcess, [
+    /Ready in\s+\d+/i,
+    /started server on/i,
+  ]);
+  const fastApiReadyPromise = isDev
+    ? waitForProcessOutputLine("FastAPI", fastApiProcess, [
+        /Application startup complete\./i,
+      ])
+    : waitForProcessHttp(
+        "FastAPI",
+        fastApiProcess,
+        fastapiPort,
+        "/api/v1/auth/status"
+      );
 
-  nextjsProcess.on("error", (err) => {
-    console.error("Next.js process failed to start:", err);
+  const suppressStartupUrls = !isDev;
+  forwardProcessOutput(fastApiProcess.stdout, process.stdout, {
+    suppressStartupUrls,
+  });
+  forwardProcessOutput(fastApiProcess.stderr, process.stderr, {
+    suppressStartupUrls,
+  });
+  forwardProcessOutput(nextjsProcess.stdout, process.stdout, {
+    suppressStartupUrls,
+  });
+  forwardProcessOutput(nextjsProcess.stderr, process.stderr, {
+    suppressStartupUrls,
   });
 
   const shouldStartOllamaRuntime = shouldStartOllama();
   const ollamaInstalled = isOllamaInstalled();
-
-  const fastApiReadyPromise = waitForProcessReady("FastAPI", fastApiProcess, [
-    /Application startup complete\./i,
-  ]);
-  const nextjsReadyPromise = waitForProcessReady("Next.js", nextjsProcess, [
-    /Ready in\s+\d+/i,
-    /started server on/i,
-  ]);
-
-  const exitPromises = [
-    new Promise((resolve) => fastApiProcess.on("exit", resolve)),
-    new Promise((resolve) => nextjsProcess.on("exit", resolve)),
-  ];
 
   if (shouldStartOllamaRuntime && ollamaInstalled) {
     const ollamaProcess = spawn("ollama", ["serve"], {
@@ -560,7 +696,7 @@ const startServers = async (nginxReadyPromise) => {
     ollamaProcess.on("error", (err) => {
       console.error("Ollama process failed to start:", err);
     });
-    exitPromises.push(new Promise((resolve) => ollamaProcess.on("exit", resolve)));
+    watchManagedProcess("Ollama", ollamaProcess);
   } else if (shouldStartOllamaRuntime) {
     console.log(
       "Ollama requested, but the binary is not installed. Set START_OLLAMA=true to install it at startup, or set OLLAMA_URL to a remote daemon."
@@ -574,19 +710,15 @@ const startServers = async (nginxReadyPromise) => {
   try {
     await Promise.all([fastApiReadyPromise, nextjsReadyPromise, nginxReadyPromise]);
     printPresentonStartupBanner({
+      mode: isDev ? "development" : "production",
       nextPort: nextjsPort,
       fastapiPort,
-      nginxInternalPort: nginxListenPort,
     });
   } catch (err) {
     console.warn(`Skipping startup banner: ${err.message}`);
   }
 
-  // Keep the Node process alive until one of the servers exits
-  const exitCode = await Promise.race(exitPromises);
-
-  console.log(`One of the processes exited. Exit code: ${exitCode}`);
-  process.exit(exitCode);
+  await new Promise(() => {});
 };
 
 // Start nginx service (reverse proxy: see nginx.conf listen + upstream ports)
@@ -620,11 +752,14 @@ const main = async () => {
 
   if (isDev) {
     await setupNodeModules();
+    await ensurePresentationExportNodeDependencies();
   }
 
   if (canChangeKeys) {
     setupUserConfigFromEnv();
   }
+
+  syncNginxConfigForDev();
 
   const nginxReadyPromise = startNginx();
   startServers(nginxReadyPromise);

@@ -1,6 +1,7 @@
 import { setLLMConfig } from "@/store/slices/userConfig";
 import { store } from "@/store/store";
 import { LLMConfig } from "@/types/llm_config";
+import { isSupportedCodexModel } from "@/utils/codexModels";
 
 function isProvided(value: unknown): boolean {
   return value !== "" && value !== null && value !== undefined;
@@ -27,43 +28,59 @@ function parseOptionalBool(value: unknown): boolean | undefined {
 export const normalizeLLMConfig = (llmConfig: LLMConfig): LLMConfig => {
   const normalizedConfig: LLMConfig = { ...llmConfig };
 
-  if (!normalizedConfig.LLM) {
-    normalizedConfig.LLM = "openai";
-  }
-
   const parsedDisableImageGeneration = parseOptionalBool(
     (normalizedConfig as Record<string, unknown>).DISABLE_IMAGE_GENERATION
   );
   if (parsedDisableImageGeneration !== undefined) {
     normalizedConfig.DISABLE_IMAGE_GENERATION = parsedDisableImageGeneration;
   }
-
-  if (normalizedConfig.DISABLE_IMAGE_GENERATION || normalizedConfig.IMAGE_PROVIDER) {
-    return normalizedConfig;
+  const parsedWebGrounding = parseOptionalBool(
+    (normalizedConfig as Record<string, unknown>).WEB_GROUNDING
+  );
+  if (parsedWebGrounding !== undefined) {
+    normalizedConfig.WEB_GROUNDING = parsedWebGrounding;
   }
-
+  for (const key of [
+    "OPENROUTER_ALLOW_FALLBACKS",
+    "OPENROUTER_REQUIRE_PARAMETERS",
+    "OPENROUTER_ZDR",
+  ] as const) {
+    const parsed = parseOptionalBool(
+      (normalizedConfig as Record<string, unknown>)[key]
+    );
+    if (parsed !== undefined) normalizedConfig[key] = parsed;
+  }
+  for (const key of ["LLM_MAX_OUTPUT_TOKENS"] as const) {
+    const value = (normalizedConfig as Record<string, unknown>)[key];
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value);
+      if (Number.isInteger(parsed)) normalizedConfig[key] = parsed;
+    }
+  }
+  const hasManualTokenLimit = isProvided(
+    (normalizedConfig as Record<string, unknown>).LLM_MAX_OUTPUT_TOKENS
+  );
   if (
-    normalizedConfig.OPENAI_COMPAT_IMAGE_BASE_URL &&
-    normalizedConfig.OPENAI_COMPAT_IMAGE_API_KEY &&
-    normalizedConfig.OPENAI_COMPAT_IMAGE_MODEL
+    normalizedConfig.LLM_GENERATION_PROFILE !== "model_max" ||
+    hasManualTokenLimit
   ) {
-    normalizedConfig.IMAGE_PROVIDER = "openai_compatible";
-  } else if (normalizedConfig.OPEN_WEBUI_IMAGE_URL) {
-    normalizedConfig.IMAGE_PROVIDER = "open_webui";
-  } else if (normalizedConfig.COMFYUI_URL) {
-    normalizedConfig.IMAGE_PROVIDER = "comfyui";
-  } else if (normalizedConfig.PEXELS_API_KEY) {
-    normalizedConfig.IMAGE_PROVIDER = "pexels";
-  } else if (normalizedConfig.PIXABAY_API_KEY) {
-    normalizedConfig.IMAGE_PROVIDER = "pixabay";
-  } else if (normalizedConfig.LLM === "openai" && normalizedConfig.OPENAI_API_KEY) {
-    normalizedConfig.IMAGE_PROVIDER = "gpt-image-1.5";
-    normalizedConfig.GPT_IMAGE_1_5_QUALITY =
-      normalizedConfig.GPT_IMAGE_1_5_QUALITY || "medium";
-  } else if (normalizedConfig.LLM === "google" && normalizedConfig.GOOGLE_API_KEY) {
-    normalizedConfig.IMAGE_PROVIDER = "gemini_flash";
-  } else {
-    normalizedConfig.DISABLE_IMAGE_GENERATION = true;
+    // Profiles are no longer user-facing. Keep only the internal model-max
+    // marker used by the checkbox and remove any legacy preset selection.
+    (normalizedConfig as Record<string, unknown>).LLM_GENERATION_PROFILE = "";
+  }
+  // Reasoning budget is no longer exposed in the UI. Sending an empty value
+  // removes any previously saved budget instead of leaving a hidden override.
+  (normalizedConfig as Record<string, unknown>).LLM_REASONING_BUDGET_TOKENS = "";
+  if (normalizedConfig.LLM_REASONING_EFFORT === "none") {
+    (normalizedConfig as Record<string, unknown>).LLM_REASONING_EFFORT = "";
+  }
+  const providerOrder = (normalizedConfig as Record<string, unknown>)
+    .OPENROUTER_PROVIDER_ORDER;
+  if (typeof providerOrder === "string") {
+    normalizedConfig.OPENROUTER_PROVIDER_ORDER = providerOrder
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
   }
 
   return normalizedConfig;
@@ -81,25 +98,46 @@ export const getLLMConfigValidationError = (
     return "Select a text provider.";
   }
 
+  const llm = llmConfig.LLM;
+  if (llm === "presenton") {
+    return null;
+  }
+
+  const maxOutputTokens = (llmConfig as Record<string, unknown>)
+    .LLM_MAX_OUTPUT_TOKENS;
+  if (
+    isProvided(maxOutputTokens) &&
+    (typeof maxOutputTokens !== "number" ||
+      !Number.isInteger(maxOutputTokens) ||
+      maxOutputTokens <= 0)
+  ) {
+    return "Max output tokens must be a whole number greater than zero.";
+  }
+
   if (!llmConfig.DISABLE_IMAGE_GENERATION && !llmConfig.IMAGE_PROVIDER) {
     return "Select an image provider, or turn off image generation.";
   }
-
-  const llm = llmConfig.LLM;
 
   if (llm === "openai") {
     if (!isProvided(llmConfig.OPENAI_API_KEY)) {
       return "OpenAI API key is required.";
     }
     if (!isProvided(llmConfig.OPENAI_MODEL)) {
-      return 'Text provider (OpenAI): choose a chat model on the Text Provider tab—use "Check models" after your API key, then pick a model. The model under Image Provider → Custom is only for image generation.';
+      return "Enter or select an OpenAI chat model ID on the Text Provider tab.";
+    }
+  } else if (llm === "deepseek") {
+    if (!isProvided(llmConfig.DEEPSEEK_API_KEY)) {
+      return "DeepSeek API key is required.";
+    }
+    if (!isProvided(llmConfig.DEEPSEEK_MODEL)) {
+      return "Enter or select a DeepSeek model ID.";
     }
   } else if (llm === "google") {
     if (!isProvided(llmConfig.GOOGLE_API_KEY)) {
       return "Google API key is required.";
     }
     if (!isProvided(llmConfig.GOOGLE_MODEL)) {
-      return 'No Google model selected. Use "Check models" after entering your API key, then choose a model.';
+      return "Enter or select a Google model ID.";
     }
   } else if (llm === "vertex") {
     const hasApiKey = isProvided(llmConfig.VERTEX_API_KEY);
@@ -173,11 +211,11 @@ export const getLLMConfigValidationError = (
       return "Anthropic API key is required.";
     }
     if (!isProvided(llmConfig.ANTHROPIC_MODEL)) {
-      return 'No Anthropic model selected. Use "Check models" after entering your API key, then choose a model.';
+      return "Enter or select an Anthropic model ID.";
     }
   } else if (llm === "ollama") {
-    if (!isProvided(llmConfig.OLLAMA_URL)) {
-      return "Ollama server URL is required.";
+    if (!isProvided(llmConfig.OLLAMA_URL?.trim())) {
+      return 'Ollama URL is required. Enter your Ollama server URL, or click "Check models" to fill the reachable default.';
     }
     if (!isProvided(llmConfig.OLLAMA_MODEL)) {
       return "Select an Ollama model. If none appear, confirm Ollama is running and reachable.";
@@ -187,22 +225,25 @@ export const getLLMConfigValidationError = (
       return "Enter your custom LLM endpoint URL (OpenAI-compatible).";
     }
     if (!isProvided(llmConfig.CUSTOM_MODEL)) {
-      return 'No model selected for your custom endpoint. Use "Check models" after entering the URL, then choose a model.';
+      return "Enter a model ID or alias for your custom endpoint.";
     }
   } else if (llm === "litellm") {
     if (!isProvided(llmConfig.LITELLM_BASE_URL)) {
       return "LiteLLM base URL is required.";
     }
     if (!isProvided(llmConfig.LITELLM_MODEL)) {
-      return 'Use "Check models" after entering the base URL, then choose a model.';
+      return "Enter or select a LiteLLM model ID or alias.";
     }
   } else if (llm === "lmstudio") {
     if (!isProvided(llmConfig.LMSTUDIO_MODEL)) {
-      return 'Use "Check models" to load local models from LM Studio, then choose one.';
+      return "Enter or select an LM Studio model ID.";
     }
   } else if (llm === "codex" || llm === "chatgpt") {
     if (!isProvided(llmConfig.CODEX_MODEL)) {
       return "Select a Codex model.";
+    }
+    if (!isSupportedCodexModel(llmConfig.CODEX_MODEL)) {
+      return "Select a supported Codex model.";
     }
   } else {
     return "Unsupported or unknown text provider.";
@@ -264,6 +305,38 @@ export const getLLMConfigValidationError = (
     }
   }
 
+  if (llmConfig.WEB_GROUNDING) {
+    if (!isProvided(llmConfig.WEB_SEARCH_PROVIDER)) {
+      return "Select a web search provider, or turn off web search.";
+    }
+    switch (llmConfig.WEB_SEARCH_PROVIDER) {
+      case "searxng":
+        if (!isProvided(llmConfig.SEARXNG_BASE_URL)) {
+          return "SearXNG base URL is required.";
+        }
+        break;
+      case "tavily":
+        if (!isProvided(llmConfig.TAVILY_API_KEY)) {
+          return "Tavily API key is required.";
+        }
+        break;
+      case "exa":
+        if (!isProvided(llmConfig.EXA_API_KEY)) {
+          return "Exa API key is required.";
+        }
+        break;
+      case "brave":
+        if (!isProvided(llmConfig.BRAVE_SEARCH_API_KEY)) {
+          return "Brave Search API key is required.";
+        }
+        break;
+      case "auto":
+        break;
+      default:
+        return "Select a valid web search provider.";
+    }
+  }
+
   return null;
 };
 
@@ -299,6 +372,24 @@ export function syncStoreAfterCodexSignOut(): void {
       ...prev,
       LLM: "codex",
       CODEX_MODEL: "",
+      CODEX_ACCESS_TOKEN: "",
+      CODEX_REFRESH_TOKEN: "",
+      CODEX_TOKEN_EXPIRES: "",
+      CODEX_ACCOUNT_ID: "",
+      CODEX_USERNAME: "",
+      CODEX_EMAIL: "",
+      CODEX_IS_PRO: false,
+    })
+  );
+}
+
+/** Clear the stale cloud selection immediately after Presenton is disconnected. */
+export function syncStoreAfterPresentonDisconnect(): void {
+  const prev = store.getState().userConfig.llm_config;
+  store.dispatch(
+    setLLMConfig({
+      ...prev,
+      LLM: "",
     })
   );
 }
@@ -310,14 +401,12 @@ export const handleSaveLLMConfig = async (llmConfig: LLMConfig) => {
     throw new Error(validationError);
   }
 
-  // Prefer shared API routes; fallback to Electron IPC for packaged compatibility.
-  if (typeof window !== "undefined" && window.electron?.setUserConfig) {
-    await window.electron.setUserConfig(normalizedConfig);
-  } else {
-    await fetch("/api/user-config", {
-      method: "POST",
-      body: JSON.stringify(normalizedConfig),
-    });
+  const response = await fetch("/api/user-config", {
+    method: "POST",
+    body: JSON.stringify(normalizedConfig),
+  });
+  if (!response.ok) {
+    throw new Error(`Unable to save user configuration (${response.status})`);
   }
 
   store.dispatch(setLLMConfig(normalizedConfig));

@@ -1,5 +1,11 @@
 import { ipcMain } from "electron";
-import { baseDir, getAppDataDir, getCacheDir, getDownloadsDir, getTempDir } from "../utils/constants";
+import {
+  getAppDataDir,
+  getCacheDir,
+  getDownloadsDir,
+  getTempDir,
+  resourceBaseDir,
+} from "../utils/constants";
 import fs from "fs";
 import path from "path";
 
@@ -18,7 +24,6 @@ import {
 } from "../utils/export-chromium";
 import { resolveExportSpawnTarget } from "../utils/export-msix-runtime";
 
-type BinaryFormat = "elf" | "mach-o" | "pe" | "unknown";
 type RuntimeCandidate = {
   command: string;
   label: string;
@@ -48,15 +53,6 @@ export async function stopActiveExportProcesses(): Promise<void> {
 }
 
 export function setupExportHandlers() {
-  ipcMain.handle("file-downloaded", async (_, filePath: string): Promise<IPCStatus> => {
-    const fileName = path.basename(filePath);
-    const destinationPath = path.join(getDownloadsDir(), fileName);
-
-    await fs.promises.rename(filePath, destinationPath);
-    showFileDownloadedDialogInBackground(destinationPath);
-    return { success: true };
-  });
-
   ipcMain.handle("export-presentation", async (_, id: string, title: string, exportAs: "pptx" | "pdf") => {
     let exportTempDir: string | undefined;
     try {
@@ -98,14 +94,12 @@ export function setupExportHandlers() {
       const exportTaskPath = path.join(exportTempDir, "export_task.json");
       await fs.promises.writeFile(exportTaskPath, JSON.stringify(exportTask));
 
-      const packagedExportRoot = path.join(baseDir, "resources", "export");
-      const packagedExportScriptPath = path.join(packagedExportRoot, "index.js");
-      const { scriptPath: exportScriptPath, converterPath: pythonModulePath } =
-        await resolveExportSpawnTarget(
-          packagedExportRoot,
-          packagedExportScriptPath,
-          (exportRoot) => resolveConverterPath(exportRoot)
-        );
+      const packagedExportRoot = path.join(resourceBaseDir, "resources", "export");
+      const packagedExportScriptPath = path.join(packagedExportRoot, "runner.mjs");
+      const { scriptPath: exportScriptPath } = await resolveExportSpawnTarget(
+        packagedExportRoot,
+        packagedExportScriptPath,
+      );
       safeLog("[Export] Spawning export task with config:", {
         exportAs,
         id,
@@ -113,7 +107,6 @@ export function setupExportHandlers() {
         pptUrl,
         exportTaskPath,
         exportScriptPath,
-        pythonModulePath,
         NEXT_PUBLIC_URL: process.env.NEXT_PUBLIC_URL,
         NEXT_PUBLIC_FAST_API: process.env.NEXT_PUBLIC_FAST_API,
       });
@@ -136,7 +129,6 @@ export function setupExportHandlers() {
         TEMP_DIRECTORY: tempDir,
         APP_DATA_DIRECTORY: appDataDir,
         NODE_ENV: "development",
-        BUILT_PYTHON_MODULE_PATH: pythonModulePath,
         PUPPETEER_EXECUTABLE_PATH: chromiumExecutablePath,
         PUPPETEER_CACHE_DIR: puppeteerCacheDir,
         PUPPETEER_TMP_DIR: puppeteerTempDir,
@@ -449,94 +441,6 @@ async function runExportTaskOnce(
     cleanup();
     destroyChildProcessStdio(exportTaskProcess);
   }
-}
-
-async function resolveConverterPath(exportRoot: string): Promise<string> {
-  const pyDir = path.join(exportRoot, "py");
-  const extension = process.platform === "win32" ? ".exe" : "";
-  const converterCandidates = [
-    path.join(pyDir, `convert-${process.platform}-${process.arch}${extension}`),
-    path.join(pyDir, `convert-${process.platform}${extension}`),
-    ...(process.platform === "win32"
-      ? [path.join(pyDir, "convert.exe"), path.join(pyDir, "convert")]
-      : [path.join(pyDir, "convert")]),
-  ];
-
-  const converterPath = await findFirstExistingPath(converterCandidates);
-  if (!converterPath) {
-    throw new Error(
-      [
-        "No converter binary found for export.",
-        "Expected one of:",
-        ...converterCandidates.map((candidate) => `  - ${candidate}`),
-      ].join("\n")
-    );
-  }
-
-  const format = await detectBinaryFormat(converterPath);
-  if (!isBinaryFormatCompatible(format)) {
-    throw new Error(
-      [
-        `Converter binary is not valid for ${process.platform}/${process.arch}.`,
-        `Selected converter: ${converterPath}`,
-        `Detected format: ${format}`,
-        "Please bundle a platform-correct converter binary (for example convert-darwin-arm64 or convert-darwin-x64).",
-      ].join("\n")
-    );
-  }
-
-  return converterPath;
-}
-
-async function findFirstExistingPath(paths: string[]): Promise<string | null> {
-  for (const candidate of paths) {
-    try {
-      await fs.promises.access(candidate, fs.constants.F_OK);
-      return candidate;
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-async function detectBinaryFormat(binaryPath: string): Promise<BinaryFormat> {
-  const fd = await fs.promises.open(binaryPath, "r");
-  try {
-    const header = Buffer.alloc(4);
-    await fd.read(header, 0, 4, 0);
-
-    if (header[0] === 0x7f && header[1] === 0x45 && header[2] === 0x4c && header[3] === 0x46) {
-      return "elf";
-    }
-
-    if (header[0] === 0x4d && header[1] === 0x5a) {
-      return "pe";
-    }
-
-    const magic = header.readUInt32BE(0);
-    if (
-      magic === 0xfeedface ||
-      magic === 0xcefaedfe ||
-      magic === 0xfeedfacf ||
-      magic === 0xcffaedfe ||
-      magic === 0xcafebabe ||
-      magic === 0xbebafeca
-    ) {
-      return "mach-o";
-    }
-
-    return "unknown";
-  } finally {
-    await fd.close();
-  }
-}
-
-function isBinaryFormatCompatible(format: BinaryFormat): boolean {
-  if (process.platform === "darwin") return format === "mach-o";
-  if (process.platform === "linux") return format === "elf";
-  if (process.platform === "win32") return format === "pe";
-  return true;
 }
 
 function resolveExportedFilePath(responseData: any): string | null {

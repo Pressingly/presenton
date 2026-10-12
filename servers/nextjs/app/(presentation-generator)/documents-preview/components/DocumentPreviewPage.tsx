@@ -17,7 +17,7 @@ import { useEffect, useState, useRef, useMemo } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { OverlayLoader } from "@/components/ui/overlay-loader";
 import { PresentationGenerationApi } from "../../services/api/presentation-generation";
-import { setPresentationId } from "@/store/slices/presentationGeneration";
+import { clearOutlines, setPresentationId } from "@/store/slices/presentationGeneration";
 import { useDispatch, useSelector } from "react-redux";
 import { useRouter, usePathname } from "next/navigation";
 import { RootState } from "@/store/store";
@@ -28,6 +28,7 @@ import { ChevronRight, PanelRightOpen, X } from "lucide-react";
 import ToolTip from "@/components/ToolTip";
 import Header from "@/app/(presentation-generator)/(dashboard)/dashboard/components/Header";
 import { trackEvent, MixpanelEvent } from "@/utils/mixpanel";
+import { parseLimitedSlideCount } from "@/utils/presentationLimits";
 
 // Types
 interface LoadingState {
@@ -153,7 +154,8 @@ const DocumentsPreviewPage: React.FC = () => {
       const createResponse = await PresentationGenerationApi.createPresentation(
         {
           content: config?.prompt ?? "",
-          n_slides: config?.slides ? parseInt(config.slides) : null,
+          version: "v2-standard",
+          n_slides: parseLimitedSlideCount(config?.slides),
           file_paths: documentPaths,
           language: config?.language ?? "",
           tone: config?.tone,
@@ -165,6 +167,7 @@ const DocumentsPreviewPage: React.FC = () => {
         }
       );
 
+      dispatch(clearOutlines());
       dispatch(setPresentationId(createResponse.id));
       trackEvent(MixpanelEvent.Navigation, { from: pathname, to: "/outline" });
       router.replace("/outline");
@@ -270,7 +273,7 @@ const DocumentsPreviewPage: React.FC = () => {
         duration={showLoading.duration}
       />
       <Header />
-      <div className="flex mt-6 gap-4 font-instrument_sans">
+      <div className="flex mt-6 gap-4 font-manrope">
         {!isOpen && (
           <div className="fixed left-4 top-1/2 -translate-y-1/2 z-50">
             <ToolTip content="Open Panel">

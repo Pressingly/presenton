@@ -23,6 +23,7 @@ container.db
 app_dist
 resources/fastapi
 resources/nextjs
+resources/templates/
 dist
 eng.traineddata
 .cache/
@@ -39,6 +40,11 @@ resources/chromium/
 resources/imagemagick/
 *.pkg
 *.provisionprofile
+*.cer
+*.certSigningRequest
+*.mobileprovision
+*.p12
+*.p8
 *.toc
 *.zip
 *.pyc

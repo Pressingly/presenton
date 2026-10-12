@@ -1,33 +1,10 @@
 import type { Metadata } from "next";
-import localFont from "next/font/local";
-import { Syne, Unbounded } from "next/font/google";
 import "./globals.css";
+import "katex/dist/katex.min.css";
 import { Providers } from "./providers";
 import MixpanelInitializer from "./MixpanelInitializer";
 import { Toaster } from "@/components/ui/sonner";
-const inter = localFont({
-  src: [
-    {
-      path: "./fonts/Inter.ttf",
-      weight: "400",
-      style: "normal",
-    },
-  ],
-  variable: "--font-inter",
-});
-
-const syne = Syne({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
-  variable: "--font-syne",
-});
-
-const unbounded = Unbounded({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
-  variable: "--font-unbounded",
-});
-
+import TailwindBrowserRuntime from "@/components/runtime/TailwindBrowserRuntime";
 export const metadata: Metadata = {
   metadataBase: new URL("https://presenton.ai"),
   title: "Presenton - Open Source AI presentation generator",
@@ -80,9 +57,7 @@ export default function RootLayout({
 
   return (
     <html lang="en">
-      <body
-        className={`${inter.variable} ${syne.variable} ${unbounded.variable} antialiased`}
-      >
+      <body className="antialiased">
         <Providers>
           <MixpanelInitializer>
 
@@ -90,6 +65,7 @@ export default function RootLayout({
 
           </MixpanelInitializer>
         </Providers>
+        <TailwindBrowserRuntime />
         <Toaster position="top-center" />
       </body>
     </html>

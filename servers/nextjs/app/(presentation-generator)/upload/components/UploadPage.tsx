@@ -10,26 +10,40 @@
  */
 
 "use client";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useDispatch, useSelector } from "react-redux";
 import { clearOutlines, setPresentationId } from "@/store/slices/presentationGeneration";
 import { PromptInput } from "./PromptInput";
 import { LanguageType, PresentationConfig, ToneType, VerbosityType } from "../type";
 import SupportingDoc from "./SupportingDoc";
-import { Button } from "@/components/ui/button";
-import { ChevronRight } from "lucide-react";
 import { notify } from "@/components/ui/sonner";
 import { PresentationGenerationApi } from "../../services/api/presentation-generation";
 import { OverlayLoader } from "@/components/ui/overlay-loader";
 import Wrapper from "@/components/Wrapper";
 import { setPptGenUploadState } from "@/store/slices/presentationGenUpload";
 import { trackEvent, MixpanelEvent } from "@/utils/mixpanel";
+import { sanitizeAnalyticsError } from "@/utils/analytics";
 import { ConfigurationSelects } from "./ConfigurationSelects";
 import { RootState } from "@/store/store";
 import { ImagesApi } from "../../services/api/images";
 import CurrentConfig from "./CurrentConfig";
 import { LLMConfig } from "@/types/llm_config";
+import {
+  clampSlideCountValue,
+  parseLimitedSlideCount,
+} from "@/utils/presentationLimits";
+import {
+  type GenerationMode,
+  type PresentationGenerationMode,
+  getInitialGenerationMode,
+  isGenerationModeAvailable,
+} from "@/utils/presentationGenerationMode";
+import CommunityReferencePicker from "./CommunityReferencePicker";
+import {
+  CommunityPresentationApi,
+  type CommunityPresentation,
+} from "../../services/api/community";
 
 const STOCK_IMAGE_PROVIDERS = new Set(["pexels", "pixabay"]);
 const FILE_TYPE_WORD = new Set([".doc", ".docx", ".docm", ".odt", ".rtf"]);
@@ -39,7 +53,6 @@ const FILE_TYPE_IMAGE = new Set([".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff
 const FILE_MIME_IMAGE = new Set(["image/jpeg", "image/png", "image/gif", "image/bmp", "image/tiff", "image/webp"]);
 const FILE_TYPE_PDF = new Set([".pdf"]);
 const FILE_TYPE_TEXT = new Set([".txt"]);
-
 // Types for loading state
 interface LoadingState {
   isLoading: boolean;
@@ -71,6 +84,8 @@ const getSelectedTextModel = (config?: LLMConfig): string => {
   switch (config.LLM) {
     case "openai":
       return config.OPENAI_MODEL || "";
+    case "deepseek":
+      return config.DEEPSEEK_MODEL || "";
     case "google":
       return config.GOOGLE_MODEL || "";
     case "vertex":
@@ -111,13 +126,41 @@ const getSelectedImageQuality = (config?: LLMConfig): string => {
   return "";
 };
 
-const UploadPage = () => {
+const getDocumentPaths = (files: unknown): string[] => {
+  if (!Array.isArray(files)) {
+    return [];
+  }
+
+  return files
+    .flat()
+    .map((file) =>
+      file && typeof file === "object" && "file_path" in file
+        ? (file as { file_path?: unknown }).file_path
+        : null
+    )
+    .filter((filePath): filePath is string => typeof filePath === "string");
+};
+
+type UploadPageProps = {
+  communityEnabled: boolean;
+  presentationGenerationMode: PresentationGenerationMode;
+};
+
+const UploadPage = ({
+  communityEnabled,
+  presentationGenerationMode,
+}: UploadPageProps) => {
   const router = useRouter();
   const pathname = usePathname();
   const dispatch = useDispatch();
   const llmConfig = useSelector((state: RootState) => state.userConfig.llm_config);
 
   const [files, setFiles] = useState<File[]>([]);
+  const [communityReference, setCommunityReference] =
+    useState<CommunityPresentation | null>(null);
+  const [generationMode, setGenerationMode] = useState<GenerationMode>(() =>
+    getInitialGenerationMode(presentationGenerationMode),
+  );
   const [config, setConfig] = useState<PresentationConfig>({
     slides: null,
     language: LanguageType.Auto,
@@ -129,6 +172,63 @@ const UploadPage = () => {
     includeTitleSlide: false,
     webSearch: false,
   });
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const requestedPrompt = params.get("prompt")?.trim();
+    const requestedCommunityId = Number(params.get("communityId"));
+    let active = true;
+
+    const requestedMode = params.get("mode");
+    if (
+      (requestedMode === "standard" || requestedMode === "smart") &&
+      isGenerationModeAvailable(presentationGenerationMode, requestedMode)
+    ) {
+      setGenerationMode(requestedMode);
+    } else {
+      setGenerationMode(getInitialGenerationMode(presentationGenerationMode));
+    }
+    if (requestedPrompt) {
+      setConfig((current) => ({ ...current, prompt: requestedPrompt }));
+    }
+    if (
+      communityEnabled &&
+      isGenerationModeAvailable(presentationGenerationMode, "smart") &&
+      Number.isSafeInteger(requestedCommunityId) &&
+      requestedCommunityId > 0
+    ) {
+      CommunityPresentationApi.getById(requestedCommunityId)
+        .then((presentation) => {
+          if (!active) return;
+          setCommunityReference(presentation);
+          trackEvent(MixpanelEvent.Smart_Mode_Reference_Selected, {
+            pathname,
+            reference_id: presentation.id,
+            source: "url_parameter",
+          });
+        })
+        .catch((loadError) => {
+          if (!active) return;
+          notify.error(
+            "Could not select the community design",
+            loadError instanceof Error ? loadError.message : undefined
+          );
+        });
+    }
+
+    return () => {
+      active = false;
+    };
+  }, [communityEnabled, pathname, presentationGenerationMode]);
+
+  useEffect(() => {
+    if (llmConfig?.WEB_GROUNDING !== undefined) {
+      setConfig((current) => ({
+        ...current,
+        webSearch: !!llmConfig.WEB_GROUNDING,
+      }));
+    }
+  }, [llmConfig?.WEB_GROUNDING]);
 
   const [loadingState, setLoadingState] = useState<LoadingState>({
     isLoading: false,
@@ -143,8 +243,7 @@ const UploadPage = () => {
     const trimmedInstructions = (config.instructions || "").trim();
     const attachmentCategories = Array.from(new Set(files.map(getFileCategory))).sort();
     const imageGenerationEnabled = !llmConfig?.DISABLE_IMAGE_GENERATION;
-    const parsedSlides =
-      config.slides && /^\d+$/.test(config.slides) ? Number(config.slides) : null;
+    const parsedSlides = parseLimitedSlideCount(config.slides);
 
     return {
       pathname,
@@ -157,6 +256,8 @@ const UploadPage = () => {
       include_table_of_contents: !!config.includeTableOfContents,
       include_title_slide: !!config.includeTitleSlide,
       web_search: !!config.webSearch,
+      generation_mode: generationMode,
+      community_reference_id: communityReference?.id ?? null,
       has_prompt: Boolean(trimmedPrompt),
       prompt_char_count: trimmedPrompt.length,
       prompt_word_count: trimmedPrompt ? trimmedPrompt.split(/\s+/).filter(Boolean).length : 0,
@@ -181,7 +282,58 @@ const UploadPage = () => {
   };
 
   const handleConfigChange = (key: keyof PresentationConfig, value: unknown) => {
-    setConfig((prev) => ({ ...prev, [key]: value } as PresentationConfig));
+    const nextValue =
+      key === "slides" && typeof value === "string"
+        ? clampSlideCountValue(value)
+        : value;
+    setConfig((prev) => ({ ...prev, [key]: nextValue } as PresentationConfig));
+  };
+
+  const handleGenerationModeChange = (mode: GenerationMode) => {
+    if (!isGenerationModeAvailable(presentationGenerationMode, mode)) return;
+    if (mode === generationMode) return;
+    const previousMode = generationMode;
+    setGenerationMode(mode);
+    if (mode === "smart") {
+      trackEvent(MixpanelEvent.Smart_Mode_Selected, {
+        pathname,
+        source: "upload_mode_selector",
+        previous_generation_mode: previousMode,
+      });
+    }
+  };
+
+  const getGenerationDestination = (presentationId: string) => {
+    if (generationMode === "smart") {
+      return `/presentation?id=${presentationId}&stream=true&type=smart`;
+    }
+
+    const params = new URLSearchParams({ id: presentationId });
+    return `/outline?${params.toString()}`;
+  };
+
+  const handleCommunityReferenceChange = (
+    presentation: CommunityPresentation | null,
+    source: "community_picker" | "prompt_reference"
+  ) => {
+    const previousReferenceId = communityReference?.id ?? null;
+    setCommunityReference(presentation);
+    if (presentation) {
+      trackEvent(MixpanelEvent.Smart_Mode_Reference_Selected, {
+        pathname,
+        reference_id: presentation.id,
+        previous_reference_id: previousReferenceId,
+        source,
+      });
+      return;
+    }
+    if (previousReferenceId !== null) {
+      trackEvent(MixpanelEvent.Smart_Mode_Reference_Removed, {
+        pathname,
+        reference_id: previousReferenceId,
+        source,
+      });
+    }
   };
 
   const ensureStockImageProviderReady = async (): Promise<boolean> => {
@@ -232,9 +384,18 @@ const UploadPage = () => {
       return false;
     }
 
-    if (!config.prompt.trim() && files.length === 0) {
+    if (
+      !config.prompt.trim() &&
+      files.length === 0 &&
+      !(communityEnabled && generationMode === "smart" && communityReference)
+    ) {
       trackUploadValidationFailure("prompt_or_document_missing");
-      notify.warning("Input required", "Provide a prompt or upload at least one document.");
+      notify.warning(
+        "Input required",
+        communityEnabled
+          ? "Provide a prompt, upload a document, or select a community reference."
+          : "Provide a prompt or upload a document."
+      );
       return false;
     }
     return true;
@@ -245,16 +406,23 @@ const UploadPage = () => {
    */
   const handleGeneratePresentation = async () => {
     if (!validateConfiguration()) return;
-    trackEvent(MixpanelEvent.Upload_Generation_Started, getUploadSnapshotProps());
-
-
-    const isStockProviderReady = await ensureStockImageProviderReady();
-    if (!isStockProviderReady) {
-      trackUploadValidationFailure("stock_image_provider_unreachable");
-      return;
+    const snapshot = getUploadSnapshotProps();
+    trackEvent(MixpanelEvent.Upload_Generation_Started, snapshot);
+    if (generationMode === "smart") {
+      trackEvent(MixpanelEvent.Smart_Mode_Generation_Started, {
+        ...snapshot,
+        source: "upload",
+      });
     }
 
     try {
+      const isStockProviderReady =
+        generationMode === "smart" || (await ensureStockImageProviderReady());
+      if (!isStockProviderReady) {
+        trackUploadValidationFailure("stock_image_provider_unreachable");
+        return;
+      }
+
       const hasUploadedAssets = files.length > 0;
 
       if (hasUploadedAssets) {
@@ -299,19 +467,63 @@ const UploadPage = () => {
       );
     }
     const responses = await Promise.all(promises);
+    const documentPaths = getDocumentPaths(responses);
+
+    setLoadingState({
+      isLoading: true,
+      message:
+        generationMode === "smart"
+          ? "Starting Smart presentation..."
+          : "Generating presentation outline...",
+      showProgress: true,
+      duration: 40,
+      extra_info: "",
+    });
+
+    const createResponse = await PresentationGenerationApi.createPresentation({
+      content: config?.prompt ?? "",
+      version: "v2-standard",
+      n_slides: parseLimitedSlideCount(config?.slides),
+      file_paths: documentPaths,
+      language: selectedLanguage,
+      tone: config?.tone,
+      verbosity: config?.verbosity,
+      instructions: config?.instructions || null,
+      include_table_of_contents: !!config?.includeTableOfContents,
+      include_title_slide: !!config?.includeTitleSlide,
+      web_search: !!config?.webSearch,
+      generation_mode: generationMode,
+      community_design_ids:
+        communityEnabled && generationMode === "smart" && communityReference
+          ? [communityReference.id]
+          : undefined,
+    });
+
     dispatch(setPptGenUploadState({
       config,
       files: responses,
     }));
-    dispatch(clearOutlines())
+    dispatch(clearOutlines());
+    dispatch(setPresentationId(createResponse.id));
     trackEvent(MixpanelEvent.Upload_Documents_Processed, {
       ...getUploadSnapshotProps(),
       uploaded_documents_count: documents.length,
       decompose_job_count: responses.length,
-      destination: "/documents-preview",
+      extracted_document_count: documentPaths.length,
+      destination:
+        generationMode === "smart" ? "/presentation" : "/outline",
     });
-    trackEvent(MixpanelEvent.Navigation, { from: pathname, to: "/documents-preview" });
-    router.push("/documents-preview");
+    trackEvent(MixpanelEvent.Upload_Outline_Generation_Requested, {
+      ...getUploadSnapshotProps(),
+      presentation_id: createResponse.id,
+      uploaded_documents_count: documents.length,
+      extracted_document_count: documentPaths.length,
+      destination:
+        generationMode === "smart" ? "/presentation" : "/outline",
+    });
+    const destination = getGenerationDestination(createResponse.id);
+    trackEvent(MixpanelEvent.Navigation, { from: pathname, to: destination });
+    router.push(destination);
   };
 
   /**
@@ -320,17 +532,21 @@ const UploadPage = () => {
   const handleDirectPresentationGeneration = async () => {
     setLoadingState({
       isLoading: true,
-      message: "Generating outlines...",
+      message:
+        generationMode === "smart"
+          ? "Starting Smart presentation..."
+          : "Preparing outline generation...",
       showProgress: true,
       duration: 30,
     });
 
     const selectedLanguage = config?.language ?? "";
 
-    // Use the first available layout group for direct generation
+    // Standard mode continues to outline review; Smart mode streams the deck directly.
     const createResponse = await PresentationGenerationApi.createPresentation({
       content: config?.prompt ?? "",
-      n_slides: config?.slides ? parseInt(config.slides, 10) : null,
+
+      n_slides: parseLimitedSlideCount(config?.slides),
       file_paths: [],
       language: selectedLanguage,
       tone: config?.tone,
@@ -339,18 +555,28 @@ const UploadPage = () => {
       include_table_of_contents: !!config?.includeTableOfContents,
       include_title_slide: !!config?.includeTitleSlide,
       web_search: !!config?.webSearch,
+      generation_mode: generationMode,
+      community_design_ids:
+        communityEnabled && generationMode === "smart" && communityReference
+          ? [communityReference.id]
+          : undefined,
     });
 
-
+    dispatch(setPptGenUploadState({
+      config,
+      files: [],
+    }));
+    dispatch(clearOutlines());
     dispatch(setPresentationId(createResponse.id));
-    dispatch(clearOutlines())
     trackEvent(MixpanelEvent.Upload_Outline_Generation_Requested, {
       ...getUploadSnapshotProps(),
       presentation_id: createResponse.id,
-      destination: "/outline",
+      destination:
+        generationMode === "smart" ? "/presentation" : "/outline",
     });
-    trackEvent(MixpanelEvent.Navigation, { from: pathname, to: "/outline" });
-    router.push("/outline");
+    const destination = getGenerationDestination(createResponse.id);
+    trackEvent(MixpanelEvent.Navigation, { from: pathname, to: destination });
+    router.push(destination);
   };
 
   /**
@@ -358,6 +584,13 @@ const UploadPage = () => {
    */
   const handleGenerationError = (error: any) => {
     console.error("Error in upload page", error);
+    if (generationMode === "smart") {
+      trackEvent(MixpanelEvent.Smart_Mode_Generation_Failed, {
+        ...getUploadSnapshotProps(),
+        stage: "presentation_setup",
+        error_message: sanitizeAnalyticsError(error, "Generation setup failed"),
+      });
+    }
     setLoadingState({
       isLoading: false,
       message: "",
@@ -371,7 +604,7 @@ const UploadPage = () => {
   };
 
   return (
-    <Wrapper className="pb-10 lg:max-w-[65%] xl:max-w-[60%]">
+    <Wrapper className="w-full pb-10">
       <OverlayLoader
         show={loadingState.isLoading}
         text={loadingState.message}
@@ -379,46 +612,60 @@ const UploadPage = () => {
         duration={loadingState.duration}
         extra_info={loadingState.extra_info}
       />
-      <div className="rounded-2xl " >
-        <div className="flex flex-col gap-4 md:items-center md:flex-row justify-between px-4 ">
-          <CurrentConfig />
+      <div className="mx-auto mb-8 max-w-[760px] space-y-[18px] px-4 lg:max-w-[780px] xl:max-w-[900px] min-[1600px]:max-w-[1050px] min-[1920px]:max-w-[1280px]">
+        <div className="flex min-h-[34px] w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <CurrentConfig webSearchEnabled={config.webSearch} />
+          </div>
           <ConfigurationSelects
+            compact
+            mode={generationMode}
+            onModeChange={
+              presentationGenerationMode === "both"
+                ? handleGenerationModeChange
+                : undefined
+            }
             config={config}
             onConfigChange={handleConfigChange}
           />
         </div>
 
-        <div className="p-4 ">
-
-          <div className="relative">
-            <PromptInput
-              value={config.prompt}
-              onChange={(value) => handleConfigChange("prompt", value)}
-
+        <PromptInput
+          value={config.prompt}
+          variant={generationMode}
+          references={
+            communityEnabled && generationMode === "smart" && communityReference
+              ? [{ id: String(communityReference.id), label: communityReference.title || "Community design" }]
+              : []
+          }
+          onRemoveReference={() =>
+            handleCommunityReferenceChange(null, "prompt_reference")
+          }
+          onChange={(value) => handleConfigChange("prompt", value)}
+          onSubmit={handleGeneratePresentation}
+          hasAttachments={files.length > 0}
+          footer={
+            <SupportingDoc
+              files={files}
+              onFilesChange={setFiles}
+              onSubmit={handleGeneratePresentation}
+              disabled={loadingState.isLoading}
             />
-          </div>
-        </div>
-        <div className="p-4 ">
-          <h3 className="text-sm font-medium text-[#333333] mb-2">Attachments (optional)</h3>
-          <SupportingDoc
-            files={[...files]}
-            onFilesChange={setFiles}
+          }
+        />
+
+      </div>
+
+      {communityEnabled && generationMode === "smart" && (
+        <div className="px-4 sm:px-6">
+          <CommunityReferencePicker
+            selectedId={communityReference?.id ?? null}
+            onSelect={(presentation) =>
+              handleCommunityReferenceChange(presentation, "community_picker")
+            }
           />
         </div>
-
-        <div className="p-4">
-          <Button
-            onClick={handleGeneratePresentation}
-            style={{
-              background: "linear-gradient(270deg, #D5CAFC 2.4%, #E3D2EB 27.88%, #F4DCD3 69.23%, #FDE4C2 100%)"
-            }}
-            className="w-fit mr-0 ml-auto rounded-[28px] flex items-center justify-center py-5 px-4  text-[#101323] font-syne font-semibold text-xs  "
-          >
-            <span>Get Started</span>
-            <ChevronRight className="!w-5 !h-5 " />
-          </Button>
-        </div>
-      </div>
+      )}
     </Wrapper>
   );
 };

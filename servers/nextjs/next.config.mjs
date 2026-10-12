@@ -1,29 +1,30 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const nextjsRoot = path.dirname(fileURLToPath(import.meta.url));
+const isElectronBuild = process.env.PRESENTON_ELECTRON_BUILD === "true";
+
 const nextConfig = {
   reactStrictMode: false,
   distDir: ".next-build",
   output: "standalone",
+  turbopack: {
+    root: nextjsRoot,
+  },
   ...(process.env.NODE_ENV !== "production"
     ? {
         allowedDevOrigins: [
-          "http://127.0.0.1:40001",
-          "http://localhost:40001",
           "127.0.0.1",
           "localhost",
         ],
       }
     : {}),
 
-  // Rewrites for development - proxy font requests to FastAPI backend
-  async rewrites() {
-    return [
-      {
-        source: '/app_data/fonts/:path*',
-        destination: 'http://localhost:5000/app_data/fonts/:path*',
-      },
-    ];
-  },
-
   images: {
+    // A packaged Electron app is installed under a read-only directory such as
+    // /opt/Presenton. Next's optimizer writes to <distDir>/cache, so emit direct
+    // image URLs for that build instead of attempting runtime cache writes.
+    unoptimized: isElectronBuild,
     remotePatterns: [
       {
         protocol: "https",
