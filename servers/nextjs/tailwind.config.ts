@@ -83,8 +83,7 @@ const config: Config = {
       },
       fontFamily: {
         syne: ["var(--font-syne)"],
-        unbounded: ["var(--font-unbounded)"],
-        inter: ["var(--font-inter)"],
+        manrope: ["var(--font-manrope)"],
       },
     },
   },

@@ -1,3 +1,5 @@
+import os
+
 from models.user_config import UserConfig
 from utils.get_env import (
     get_anthropic_api_key_env,
@@ -7,6 +9,9 @@ from utils.get_env import (
     get_custom_llm_api_key_env,
     get_custom_llm_url_env,
     get_custom_model_env,
+    get_deepseek_api_key_env,
+    get_deepseek_base_url_env,
+    get_deepseek_model_env,
     get_dall_e_3_quality_env,
     get_disable_image_generation_env,
     get_disable_thinking_env,
@@ -48,6 +53,11 @@ from utils.get_env import (
     get_openrouter_api_key_env,
     get_openrouter_base_url_env,
     get_openrouter_model_env,
+    get_openrouter_provider_order_env,
+    get_openrouter_allow_fallbacks_env,
+    get_openrouter_require_parameters_env,
+    get_openrouter_data_collection_env,
+    get_openrouter_zdr_env,
     get_gpt_image_1_5_quality_env,
     get_llm_provider_env,
     get_ollama_model_env,
@@ -59,7 +69,19 @@ from utils.get_env import (
     get_image_provider_env,
     get_pixabay_api_key_env,
     get_extended_reasoning_env,
+    get_llm_generation_profile_env,
+    get_llm_max_output_tokens_env,
+    get_llm_reasoning_mode_env,
+    get_llm_reasoning_effort_env,
+    get_llm_reasoning_budget_tokens_env,
     get_web_grounding_env,
+    get_web_search_provider_env,
+    get_web_search_max_results_env,
+    get_searxng_base_url_env,
+    get_tavily_api_key_env,
+    get_exa_api_key_env,
+    get_brave_search_api_key_env,
+    get_serper_api_key_env,
     get_codex_access_token_env,
     get_codex_refresh_token_env,
     get_codex_token_expires_env,
@@ -84,10 +106,18 @@ from utils.set_env import (
     set_custom_llm_api_key_env,
     set_custom_llm_url_env,
     set_custom_model_env,
+    set_deepseek_api_key_env,
+    set_deepseek_base_url_env,
+    set_deepseek_model_env,
     set_dall_e_3_quality_env,
     set_disable_image_generation_env,
     set_disable_thinking_env,
     set_extended_reasoning_env,
+    set_llm_generation_profile_env,
+    set_llm_max_output_tokens_env,
+    set_llm_reasoning_mode_env,
+    set_llm_reasoning_effort_env,
+    set_llm_reasoning_budget_tokens_env,
     set_google_api_key_env,
     set_google_model_env,
     set_vertex_api_key_env,
@@ -126,6 +156,11 @@ from utils.set_env import (
     set_openrouter_api_key_env,
     set_openrouter_base_url_env,
     set_openrouter_model_env,
+    set_openrouter_provider_order_env,
+    set_openrouter_allow_fallbacks_env,
+    set_openrouter_require_parameters_env,
+    set_openrouter_data_collection_env,
+    set_openrouter_zdr_env,
     set_gpt_image_1_5_quality_env,
     set_llm_provider_env,
     set_ollama_model_env,
@@ -136,6 +171,13 @@ from utils.set_env import (
     set_image_provider_env,
     set_pixabay_api_key_env,
     set_web_grounding_env,
+    set_web_search_provider_env,
+    set_web_search_max_results_env,
+    set_searxng_base_url_env,
+    set_tavily_api_key_env,
+    set_exa_api_key_env,
+    set_brave_search_api_key_env,
+    set_serper_api_key_env,
     set_codex_access_token_env,
     set_codex_refresh_token_env,
     set_codex_token_expires_env,
@@ -156,9 +198,11 @@ def get_user_config():
     user_config_path = get_user_config_path_env()
 
     existing_config = UserConfig()
+    existing_config_data = {}
     try:
         if user_config_path:
-            existing_config = UserConfig(**read_user_config_file(user_config_path))
+            existing_config_data = read_user_config_file(user_config_path)
+            existing_config = UserConfig(**existing_config_data)
     except Exception:
         print("Error while loading user config")
         pass
@@ -200,6 +244,31 @@ def get_user_config():
         OPENROUTER_API_KEY=existing_config.OPENROUTER_API_KEY or get_openrouter_api_key_env(),
         OPENROUTER_MODEL=existing_config.OPENROUTER_MODEL or get_openrouter_model_env(),
         OPENROUTER_BASE_URL=existing_config.OPENROUTER_BASE_URL or get_openrouter_base_url_env(),
+        OPENROUTER_PROVIDER_ORDER=(
+            existing_config.OPENROUTER_PROVIDER_ORDER
+            or [
+                item.strip()
+                for item in (get_openrouter_provider_order_env() or "").split(",")
+                if item.strip()
+            ]
+        ),
+        OPENROUTER_ALLOW_FALLBACKS=(
+            existing_config.OPENROUTER_ALLOW_FALLBACKS
+            if existing_config.OPENROUTER_ALLOW_FALLBACKS is not None
+            else parse_bool_or_none(get_openrouter_allow_fallbacks_env())
+        ),
+        OPENROUTER_REQUIRE_PARAMETERS=(
+            existing_config.OPENROUTER_REQUIRE_PARAMETERS
+            if existing_config.OPENROUTER_REQUIRE_PARAMETERS is not None
+            else parse_bool_or_none(get_openrouter_require_parameters_env())
+        ),
+        OPENROUTER_DATA_COLLECTION=existing_config.OPENROUTER_DATA_COLLECTION
+        or get_openrouter_data_collection_env(),
+        OPENROUTER_ZDR=(
+            existing_config.OPENROUTER_ZDR
+            if existing_config.OPENROUTER_ZDR is not None
+            else parse_bool_or_none(get_openrouter_zdr_env())
+        ),
         FIREWORKS_API_KEY=existing_config.FIREWORKS_API_KEY or get_fireworks_api_key_env(),
         FIREWORKS_MODEL=existing_config.FIREWORKS_MODEL or get_fireworks_model_env(),
         FIREWORKS_BASE_URL=existing_config.FIREWORKS_BASE_URL
@@ -219,12 +288,19 @@ def get_user_config():
         ANTHROPIC_API_KEY=existing_config.ANTHROPIC_API_KEY
         or get_anthropic_api_key_env(),
         ANTHROPIC_MODEL=existing_config.ANTHROPIC_MODEL or get_anthropic_model_env(),
-        OLLAMA_URL=existing_config.OLLAMA_URL or get_ollama_url_env(),
+        OLLAMA_URL=(
+            existing_config.OLLAMA_URL
+            if "OLLAMA_URL" in existing_config_data
+            else get_ollama_url_env()
+        ),
         OLLAMA_MODEL=existing_config.OLLAMA_MODEL or get_ollama_model_env(),
         CUSTOM_LLM_URL=existing_config.CUSTOM_LLM_URL or get_custom_llm_url_env(),
         CUSTOM_LLM_API_KEY=existing_config.CUSTOM_LLM_API_KEY
         or get_custom_llm_api_key_env(),
         CUSTOM_MODEL=existing_config.CUSTOM_MODEL or get_custom_model_env(),
+        DEEPSEEK_BASE_URL=existing_config.DEEPSEEK_BASE_URL or get_deepseek_base_url_env(),
+        DEEPSEEK_API_KEY=existing_config.DEEPSEEK_API_KEY or get_deepseek_api_key_env(),
+        DEEPSEEK_MODEL=existing_config.DEEPSEEK_MODEL or get_deepseek_model_env(),
         IMAGE_PROVIDER=existing_config.IMAGE_PROVIDER or get_image_provider_env(),
         DISABLE_IMAGE_GENERATION=(
             existing_config.DISABLE_IMAGE_GENERATION
@@ -248,11 +324,34 @@ def get_user_config():
             if existing_config.EXTENDED_REASONING is not None
             else (parse_bool_or_none(get_extended_reasoning_env()) or False)
         ),
+        LLM_GENERATION_PROFILE=existing_config.LLM_GENERATION_PROFILE
+        or get_llm_generation_profile_env(),
+        LLM_MAX_OUTPUT_TOKENS=existing_config.LLM_MAX_OUTPUT_TOKENS
+        or get_llm_max_output_tokens_env(),
+        LLM_REASONING_MODE=existing_config.LLM_REASONING_MODE
+        or get_llm_reasoning_mode_env(),
+        LLM_REASONING_EFFORT=existing_config.LLM_REASONING_EFFORT
+        or get_llm_reasoning_effort_env(),
+        LLM_REASONING_BUDGET_TOKENS=(
+            existing_config.LLM_REASONING_BUDGET_TOKENS
+            if existing_config.LLM_REASONING_BUDGET_TOKENS is not None
+            else get_llm_reasoning_budget_tokens_env()
+        ),
         WEB_GROUNDING=(
             existing_config.WEB_GROUNDING
             if existing_config.WEB_GROUNDING is not None
             else (parse_bool_or_none(get_web_grounding_env()) or False)
         ),
+        WEB_SEARCH_PROVIDER=existing_config.WEB_SEARCH_PROVIDER
+        or get_web_search_provider_env(),
+        WEB_SEARCH_MAX_RESULTS=existing_config.WEB_SEARCH_MAX_RESULTS
+        or get_web_search_max_results_env(),
+        SEARXNG_BASE_URL=existing_config.SEARXNG_BASE_URL or get_searxng_base_url_env(),
+        TAVILY_API_KEY=existing_config.TAVILY_API_KEY or get_tavily_api_key_env(),
+        EXA_API_KEY=existing_config.EXA_API_KEY or get_exa_api_key_env(),
+        BRAVE_SEARCH_API_KEY=existing_config.BRAVE_SEARCH_API_KEY
+        or get_brave_search_api_key_env(),
+        SERPER_API_KEY=existing_config.SERPER_API_KEY or get_serper_api_key_env(),
         CODEX_MODEL=existing_config.CODEX_MODEL or get_codex_model_env(),
         CODEX_ACCESS_TOKEN=existing_config.CODEX_ACCESS_TOKEN or get_codex_access_token_env(),
         CODEX_REFRESH_TOKEN=existing_config.CODEX_REFRESH_TOKEN or get_codex_refresh_token_env(),
@@ -277,6 +376,27 @@ def get_user_config():
 
 
 def update_env_with_user_config():
+    user_config_path = get_user_config_path_env()
+    if user_config_path:
+        persisted = read_user_config_file(user_config_path)
+        if not persisted.get("LLM"):
+            os.environ.pop("LLM", None)
+        for key in (
+            "LLM_GENERATION_PROFILE",
+            "LLM_MAX_OUTPUT_TOKENS",
+            "LLM_REASONING_MODE",
+            "LLM_REASONING_EFFORT",
+            "LLM_REASONING_BUDGET_TOKENS",
+            "DISABLE_THINKING",
+            "EXTENDED_REASONING",
+            "OPENROUTER_PROVIDER_ORDER",
+            "OPENROUTER_ALLOW_FALLBACKS",
+            "OPENROUTER_REQUIRE_PARAMETERS",
+            "OPENROUTER_DATA_COLLECTION",
+            "OPENROUTER_ZDR",
+        ):
+            if key not in persisted:
+                os.environ.pop(key, None)
     user_config = get_user_config()
     if user_config.LLM:
         set_llm_provider_env(user_config.LLM)
@@ -330,6 +450,16 @@ def update_env_with_user_config():
         set_openrouter_model_env(user_config.OPENROUTER_MODEL)
     if user_config.OPENROUTER_BASE_URL:
         set_openrouter_base_url_env(user_config.OPENROUTER_BASE_URL)
+    if user_config.OPENROUTER_PROVIDER_ORDER:
+        set_openrouter_provider_order_env(",".join(user_config.OPENROUTER_PROVIDER_ORDER))
+    if user_config.OPENROUTER_ALLOW_FALLBACKS is not None:
+        set_openrouter_allow_fallbacks_env(str(user_config.OPENROUTER_ALLOW_FALLBACKS))
+    if user_config.OPENROUTER_REQUIRE_PARAMETERS is not None:
+        set_openrouter_require_parameters_env(str(user_config.OPENROUTER_REQUIRE_PARAMETERS))
+    if user_config.OPENROUTER_DATA_COLLECTION:
+        set_openrouter_data_collection_env(user_config.OPENROUTER_DATA_COLLECTION)
+    if user_config.OPENROUTER_ZDR is not None:
+        set_openrouter_zdr_env(str(user_config.OPENROUTER_ZDR))
     if user_config.FIREWORKS_API_KEY:
         set_fireworks_api_key_env(user_config.FIREWORKS_API_KEY)
     if user_config.FIREWORKS_MODEL:
@@ -364,7 +494,7 @@ def update_env_with_user_config():
         set_anthropic_api_key_env(user_config.ANTHROPIC_API_KEY)
     if user_config.ANTHROPIC_MODEL:
         set_anthropic_model_env(user_config.ANTHROPIC_MODEL)
-    if user_config.OLLAMA_URL:
+    if user_config.OLLAMA_URL is not None:
         set_ollama_url_env(user_config.OLLAMA_URL)
     if user_config.OLLAMA_MODEL:
         set_ollama_model_env(user_config.OLLAMA_MODEL)
@@ -374,6 +504,12 @@ def update_env_with_user_config():
         set_custom_llm_api_key_env(user_config.CUSTOM_LLM_API_KEY)
     if user_config.CUSTOM_MODEL:
         set_custom_model_env(user_config.CUSTOM_MODEL)
+    if user_config.DEEPSEEK_BASE_URL:
+        set_deepseek_base_url_env(user_config.DEEPSEEK_BASE_URL)
+    if user_config.DEEPSEEK_API_KEY:
+        set_deepseek_api_key_env(user_config.DEEPSEEK_API_KEY)
+    if user_config.DEEPSEEK_MODEL:
+        set_deepseek_model_env(user_config.DEEPSEEK_MODEL)
     if user_config.DISABLE_IMAGE_GENERATION is not None:
         set_disable_image_generation_env(str(user_config.DISABLE_IMAGE_GENERATION))
     if user_config.IMAGE_PROVIDER:
@@ -394,8 +530,34 @@ def update_env_with_user_config():
         set_disable_thinking_env(str(user_config.DISABLE_THINKING))
     if user_config.EXTENDED_REASONING is not None:
         set_extended_reasoning_env(str(user_config.EXTENDED_REASONING))
+    if user_config.LLM_GENERATION_PROFILE:
+        set_llm_generation_profile_env(user_config.LLM_GENERATION_PROFILE)
+    if user_config.LLM_MAX_OUTPUT_TOKENS is not None:
+        set_llm_max_output_tokens_env(str(user_config.LLM_MAX_OUTPUT_TOKENS))
+    if user_config.LLM_REASONING_MODE:
+        set_llm_reasoning_mode_env(user_config.LLM_REASONING_MODE)
+    if user_config.LLM_REASONING_EFFORT:
+        set_llm_reasoning_effort_env(user_config.LLM_REASONING_EFFORT)
+    if user_config.LLM_REASONING_BUDGET_TOKENS is not None:
+        set_llm_reasoning_budget_tokens_env(
+            str(user_config.LLM_REASONING_BUDGET_TOKENS)
+        )
     if user_config.WEB_GROUNDING is not None:
         set_web_grounding_env(str(user_config.WEB_GROUNDING))
+    if user_config.WEB_SEARCH_PROVIDER:
+        set_web_search_provider_env(user_config.WEB_SEARCH_PROVIDER)
+    if user_config.WEB_SEARCH_MAX_RESULTS:
+        set_web_search_max_results_env(user_config.WEB_SEARCH_MAX_RESULTS)
+    if user_config.SEARXNG_BASE_URL:
+        set_searxng_base_url_env(user_config.SEARXNG_BASE_URL)
+    if user_config.TAVILY_API_KEY:
+        set_tavily_api_key_env(user_config.TAVILY_API_KEY)
+    if user_config.EXA_API_KEY:
+        set_exa_api_key_env(user_config.EXA_API_KEY)
+    if user_config.BRAVE_SEARCH_API_KEY:
+        set_brave_search_api_key_env(user_config.BRAVE_SEARCH_API_KEY)
+    if user_config.SERPER_API_KEY:
+        set_serper_api_key_env(user_config.SERPER_API_KEY)
     if user_config.CODEX_MODEL:
         set_codex_model_env(user_config.CODEX_MODEL)
     if user_config.CODEX_ACCESS_TOKEN:
@@ -424,17 +586,19 @@ def update_env_with_user_config():
         set_openai_compat_image_model_env(user_config.OPENAI_COMPAT_IMAGE_MODEL)
 
 
-def save_codex_tokens_to_user_config() -> None:
+def save_codex_tokens_to_user_config(*, include_model: bool = False) -> None:
     """
     Write the current in-memory Codex OAuth token env vars back to userConfig.json
-    so they survive container restarts.  Called after a successful token exchange
-    and on logout (where the env vars have already been cleared to "").
+    so they survive container restarts.  Pass include_model=True on logout, where
+    CODEX_MODEL has already been cleared and should be persisted as cleared.
     """
     user_config_path = get_user_config_path_env()
     if not user_config_path:
         return
 
     def merge_codex_tokens(existing: dict) -> dict:
+        if include_model:
+            existing["CODEX_MODEL"] = get_codex_model_env()
         existing["CODEX_ACCESS_TOKEN"] = get_codex_access_token_env()
         existing["CODEX_REFRESH_TOKEN"] = get_codex_refresh_token_env()
         existing["CODEX_TOKEN_EXPIRES"] = get_codex_token_expires_env()
@@ -446,5 +610,10 @@ def save_codex_tokens_to_user_config() -> None:
 
     try:
         update_user_config_file(user_config_path, merge_codex_tokens)
+        from services.provider_settings import (
+            sync_legacy_file_to_provider_settings,
+        )
+
+        sync_legacy_file_to_provider_settings()
     except Exception as error:
         print(f"Error while saving Codex tokens to user config: {error}")

@@ -1,7 +1,12 @@
 import { ArrowRight, PartyPopper } from 'lucide-react'
 import { usePathname, useRouter } from 'next/navigation'
 import React, { useCallback, useEffect, useState } from 'react'
-import { trackEvent, MixpanelEvent, setTelemetryEnabled } from "@/utils/mixpanel";
+import {
+    trackEvent,
+    trackEventImmediately,
+    MixpanelEvent,
+    setTelemetryEnabled,
+} from "@/utils/mixpanel";
 import { Switch } from '../ui/switch';
 import confetti from 'canvas-confetti';
 
@@ -29,14 +34,19 @@ const FinalStep = () => {
 
     useEffect(() => {
         fireRealisticConfetti();
+        trackEvent(MixpanelEvent.Onboarding_Step_Viewed, {
+            step_name: "finish",
+            step_number: 4,
+        });
+        trackEvent(MixpanelEvent.Onboarding_Completed);
     }, []);
 
     useEffect(() => {
         async function fetchStatus() {
             try {
-        const data = window.electron?.telemetryStatus
-          ? await window.electron.telemetryStatus()
-          : await fetch('/api/telemetry-status').then((res) => res.json());
+                const response = await fetch('/api/telemetry-status');
+                if (!response.ok) throw new Error(`telemetry-status returned ${response.status}`);
+                const data = await response.json();
                 setTrackingEnabled(data.telemetryEnabled);
             } catch {
                 setTrackingEnabled(true);
@@ -48,20 +58,24 @@ const FinalStep = () => {
     const handleTrackingToggle = useCallback(async (enabled: boolean) => {
         const prev = trackingEnabled;
         setTrackingEnabled(enabled);
+        if (!enabled) {
+            try {
+                await trackEventImmediately(MixpanelEvent.Usage_Analytics_Disabled, {
+                    source: "onboarding",
+                });
+            } catch {
+                // Analytics failures must not prevent the user from opting out.
+            }
+        }
         setTelemetryEnabled(enabled);
         try {
-      if (window.electron?.setUserConfig) {
-        await window.electron.setUserConfig({
-          DISABLE_ANONYMOUS_TRACKING: enabled ? undefined : 'true',
-        } as any);
-      } else {
-        await fetch('/api/user-config', {
-          method: 'POST',
-          body: JSON.stringify({
-            DISABLE_ANONYMOUS_TRACKING: enabled ? undefined : 'true',
-          }),
-        });
-      }
+            const response = await fetch('/api/user-config', {
+                method: 'POST',
+                body: JSON.stringify({
+                    DISABLE_ANONYMOUS_TRACKING: enabled ? 'false' : 'true',
+                }),
+            });
+            if (!response.ok) throw new Error(`user-config returned ${response.status}`);
         } catch {
             setTrackingEnabled(prev);
             setTelemetryEnabled(prev ?? true);
@@ -81,7 +95,7 @@ const FinalStep = () => {
             <div className='flex flex-col items-center justify-center'>
 
                 <img src="/final_onboarding.png" alt="presenton" className='w-[118px] h-[98px]  object-contain' />
-                <h1 className='text-black text-[30px] font-normal font-unbounded py-2.5'>Welcome on board!</h1>
+                <h1 className='text-black text-[30px] font-normal font-syne py-2.5'>Welcome on board!</h1>
                 <p className='text-[#000000CC] text-xl font-normal font-syne'>You’re all set. Let’s create your first presentation.</p>
 
                 {trackingEnabled !== null && (

@@ -33,6 +33,10 @@ export interface Slide {
   graph_id: string | null;
   presentation?: string;
   speaker_note?: string;
+  layout?: string;
+  layout_group?: string;
+  html_content?: string | null;
+  ui?: Record<string, unknown> | null;
 
   content: SlideContent;
 }

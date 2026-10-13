@@ -10,8 +10,10 @@ import {
   ArrowUpRight,
   Pencil,
   Check,
+  Keyboard,
   X,
   AlertTriangle,
+  MousePointer2,
 } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
@@ -20,16 +22,21 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { PresentationGenerationApi } from "../../services/api/presentation-generation";
 import { useDispatch, useSelector } from "react-redux";
 
 import { RootState } from "@/store/store";
 import { notify } from "@/components/ui/sonner";
-import { trackEvent, MixpanelEvent } from "@/utils/mixpanel";
+import {
+  trackEvent,
+  trackEventImmediately,
+  MixpanelEvent,
+} from "@/utils/mixpanel";
 import { usePresentationUndoRedo } from "../hooks/PresentationUndoRedo";
 import ToolTip from "@/components/ToolTip";
 import {
+  clearChatHtmlSelection,
   clearPresentationData,
+  setEnableHtmlSelector,
   updateTitle,
 } from "@/store/slices/presentationGeneration";
 import { clearHistory } from "@/store/slices/undoRedoSlice";
@@ -42,12 +49,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import ThemeSelector from "./ThemeSelector";
-import { DEFAULT_THEMES } from "../../(dashboard)/theme/components/ThemePanel/constants";
-import ThemeApi from "../../services/api/theme";
-import { Theme } from "../../services/api/types";
 import MarkdownRenderer from "@/components/MarkDownRender";
 import { cn } from "@/lib/utils";
+import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
+import { sanitizeAnalyticsError } from "@/utils/analytics";
+import { v4 as uuidv4 } from "uuid";
+import StreamingGenerationMetrics from "./StreamingGenerationMetrics";
 
 const MAX_EXPORT_TITLE_LENGTH = 40;
 
@@ -89,15 +96,18 @@ const PresentationHeader = ({
   presentation_id,
   isPresentationSaving,
   currentSlide,
+  generationMode = "standard",
+
 }: {
   presentation_id: string;
   isPresentationSaving: boolean;
   currentSlide?: number;
+  generationMode?: "standard" | "smart";
 }) => {
   const [open, setOpen] = useState(false);
+  const [shortcutsDialogOpen, setShortcutsDialogOpen] = useState(false);
   const router = useRouter();
   const [isExporting, setIsExporting] = useState(false);
-  const [themes, setThemes] = useState<Theme[]>([]);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isRegenerateConfirmOpen, setIsRegenerateConfirmOpen] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
@@ -108,24 +118,12 @@ const PresentationHeader = ({
   const pathname = usePathname();
   const dispatch = useDispatch();
 
-  const { presentationData, isStreaming } = useSelector(
-    (state: RootState) => state.presentationGeneration
-  );
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const [customThemes] = await Promise.all([ThemeApi.getThemes()]);
-        setThemes([...customThemes, ...DEFAULT_THEMES]);
-      } catch (e: any) {
-        notify.error("Could not load themes", e?.message || "Failed to load themes.");
-      }
-    };
-    if (themes.length === 0) {
-      load();
-    }
-  }, []);
-
+  const {
+    presentationData,
+    isStreaming,
+    enableHtmlSelector,
+    generationMetrics,
+  } = useSelector((state: RootState) => state.presentationGeneration);
   const { onUndo, onRedo, canUndo, canRedo } = usePresentationUndoRedo();
 
   useEffect(() => {
@@ -134,6 +132,27 @@ const PresentationHeader = ({
       titleInputRef.current?.select();
     }
   }, [isEditingTitle]);
+
+  useEffect(() => {
+    if (generationMode !== "smart" || isStreaming) {
+      dispatch(setEnableHtmlSelector(false));
+      return;
+    }
+    const storedMode = window.localStorage.getItem("html-selector-mode");
+    dispatch(setEnableHtmlSelector(storedMode !== "false"));
+  }, [dispatch, generationMode, isStreaming]);
+
+  const toggleHtmlSelector = () => {
+    const nextValue = !enableHtmlSelector;
+    dispatch(setEnableHtmlSelector(nextValue));
+    if (!nextValue) dispatch(clearChatHtmlSelection());
+    window.localStorage.setItem("html-selector-mode", String(nextValue));
+    trackEvent(MixpanelEvent.Smart_Mode_Select_Edit_Toggled, {
+      pathname,
+      presentation_id,
+      enabled: nextValue,
+    });
+  };
 
   const beginTitleEdit = () => {
     if (isStreaming || !presentationData) return;
@@ -204,29 +223,31 @@ const PresentationHeader = ({
   const handleExportPptx = async () => {
     if (isStreaming) return;
 
+    const exportId = uuidv4();
+    const exportStartedAt = Date.now();
+    const exportRuntime = window.electron?.exportPresentation
+      ? "electron"
+      : "browser_api";
     let exportToastId: string | number | undefined;
     try {
-      trackEvent(MixpanelEvent.Presentation_Export_Started, {
-        pathname,
-        presentation_id,
-        format: "pptx",
-        slide_count: presentationData?.slides?.length || 0,
-      });
       exportToastId = notify.loading(
         "Exporting PPTX",
         "Your presentation is being exported. This may take a moment."
       );
       setIsExporting(true);
-      // Save the presentation data before exporting
-      await PresentationGenerationApi.updatePresentationContent(
-        presentationData
+      await trackExportLifecycle(
+        MixpanelEvent.Presentation_Export_Started,
+        "pptx",
+        exportRuntime,
+        exportId,
+        exportStartedAt
       );
       const safePptxFileName = buildSafeExportFileName(
         presentationData?.title,
         "pptx"
       );
       const safePptxTitle = safePptxFileName.replace(/\.pptx$/i, "");
-      if (window.electron?.exportPresentation) {
+      if (exportRuntime === "electron") {
         await exportViaIpc("pptx", safePptxTitle);
       } else {
         const response = await fetch("/api/export-presentation", {
@@ -249,6 +270,13 @@ const PresentationHeader = ({
 
         downloadLink(pptxPath, safePptxFileName);
       }
+      await trackExportLifecycle(
+        MixpanelEvent.Presentation_Export_Completed,
+        "pptx",
+        exportRuntime,
+        exportId,
+        exportStartedAt
+      );
       notify.success(
         "Export complete",
         "Your PPTX file has been downloaded.",
@@ -256,6 +284,14 @@ const PresentationHeader = ({
       );
     } catch (error) {
       console.error("Export failed:", error);
+      await trackExportLifecycle(
+        MixpanelEvent.Presentation_Export_Failed,
+        "pptx",
+        exportRuntime,
+        exportId,
+        exportStartedAt,
+        error
+      );
       notify.error(
         "Export failed",
         "We are having trouble exporting your presentation. Please try again.",
@@ -269,29 +305,31 @@ const PresentationHeader = ({
   const handleExportPdf = async () => {
     if (isStreaming) return;
 
+    const exportId = uuidv4();
+    const exportStartedAt = Date.now();
+    const exportRuntime = window.electron?.exportPresentation
+      ? "electron"
+      : "browser_api";
     let exportToastId: string | number | undefined;
     try {
-      trackEvent(MixpanelEvent.Presentation_Export_Started, {
-        pathname,
-        presentation_id,
-        format: "pdf",
-        slide_count: presentationData?.slides?.length || 0,
-      });
       exportToastId = notify.loading(
         "Exporting PDF",
         "Your presentation is being exported. This may take a moment."
       );
       setIsExporting(true);
-      // Save the presentation data before exporting
-      await PresentationGenerationApi.updatePresentationContent(
-        presentationData
+      await trackExportLifecycle(
+        MixpanelEvent.Presentation_Export_Started,
+        "pdf",
+        exportRuntime,
+        exportId,
+        exportStartedAt
       );
       const safePdfFileName = buildSafeExportFileName(
         presentationData?.title,
         "pdf"
       );
       const safePdfTitle = safePdfFileName.replace(/\.pdf$/i, "");
-      if (window.electron?.exportPresentation) {
+      if (exportRuntime === "electron") {
         await exportViaIpc("pdf", safePdfTitle);
       } else {
         const response = await fetch("/api/export-presentation", {
@@ -305,18 +343,36 @@ const PresentationHeader = ({
 
         if (response.ok) {
           const { path: pdfPath } = await response.json();
+          if (!pdfPath) {
+            throw new Error("No path returned from export");
+          }
           downloadLink(pdfPath, safePdfFileName);
         } else {
           throw new Error("Failed to export PDF");
         }
       }
+      await trackExportLifecycle(
+        MixpanelEvent.Presentation_Export_Completed,
+        "pdf",
+        exportRuntime,
+        exportId,
+        exportStartedAt
+      );
       notify.success(
         "Export complete",
         "Your PDF file has been downloaded.",
         { id: exportToastId }
       );
-    } catch (err) {
-      console.error(err);
+    } catch (error) {
+      console.error(error);
+      await trackExportLifecycle(
+        MixpanelEvent.Presentation_Export_Failed,
+        "pdf",
+        exportRuntime,
+        exportId,
+        exportStartedAt,
+        error
+      );
       notify.error(
         "Export failed",
         "We are having trouble exporting your presentation. Please try again.",
@@ -334,8 +390,21 @@ const PresentationHeader = ({
       pathname,
       presentation_id,
       slide_count: presentationData?.slides?.length || 0,
+      generation_mode: generationMode,
     });
-    router.push(`/presentation?id=${presentation_id}&stream=true`);
+    if (generationMode === "smart") {
+      trackEvent(MixpanelEvent.Smart_Mode_Generation_Started, {
+        pathname,
+        presentation_id,
+        slide_count: presentationData?.slides?.length || 0,
+        source: "regenerate",
+      });
+    }
+    router.push(
+      `/presentation?id=${presentation_id}&stream=true${
+        generationMode === "smart" ? "&type=smart" : ""
+      }`
+    );
   };
   const downloadLink = (path: string, fileName: string) => {
     const link = document.createElement("a");
@@ -345,6 +414,39 @@ const PresentationHeader = ({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const trackExportLifecycle = async (
+    event:
+      | MixpanelEvent.Presentation_Export_Started
+      | MixpanelEvent.Presentation_Export_Completed
+      | MixpanelEvent.Presentation_Export_Failed,
+    format: "pptx" | "pdf",
+    exportRuntime: "electron" | "browser_api",
+    exportId: string,
+    exportStartedAt: number,
+    error?: unknown
+  ) => {
+    try {
+      await trackEventImmediately(event, {
+        pathname,
+        presentation_id,
+        export_id: exportId,
+        format,
+        slide_count: presentationData?.slides?.length || 0,
+        export_runtime: exportRuntime,
+        generation_mode: generationMode,
+        ...(event !== MixpanelEvent.Presentation_Export_Started
+          ? { duration_ms: Date.now() - exportStartedAt }
+          : {}),
+        ...(error !== undefined
+          ? { error_message: sanitizeAnalyticsError(error, "Export failed") }
+          : {}),
+      });
+    } catch (analyticsError) {
+      // Analytics must never prevent or change the result of an export.
+      console.warn("Failed to track export lifecycle:", analyticsError);
+    }
   };
 
   const ExportOptions = ({ mobile }: { mobile: boolean }) => (
@@ -360,9 +462,8 @@ const PresentationHeader = ({
             setOpen(false);
           }}
           variant="ghost"
-          className={`  rounded-none px-0 w-full text-xs flex justify-start text-black hover:bg-transparent ${
-            mobile ? "bg-white py-6 border-none rounded-lg" : ""
-          }`}
+          className={`  rounded-none px-0 w-full text-xs flex justify-start text-black hover:bg-transparent ${mobile ? "bg-white py-6 border-none rounded-lg" : ""
+            }`}
         >
           PDF
           <ArrowUpRight className="w-3.5 h-3.5" />
@@ -373,9 +474,8 @@ const PresentationHeader = ({
             setOpen(false);
           }}
           variant="ghost"
-          className={`w-full flex px-0 justify-start text-xs text-black hover:bg-transparent  ${
-            mobile ? "bg-white py-6" : ""
-          }`}
+          className={`w-full flex px-0 justify-start text-xs text-black hover:bg-transparent  ${mobile ? "bg-white py-6" : ""
+            }`}
         >
           PPTX
           <ArrowUpRight className="w-3.5 h-3.5" />
@@ -410,7 +510,7 @@ const PresentationHeader = ({
               }
             }}
             placeholder="Presentation title"
-            className="min-w-0 flex-1 bg-transparent py-2 pr-2 font-unbounded text-base leading-tight text-[#101323] placeholder:text-[#101323]/35 outline-none border-0 focus:ring-0"
+            className="min-w-0 flex-1 bg-transparent py-2 pr-2 font-syne text-base leading-tight text-[#101323] placeholder:text-[#101323]/35 outline-none border-0 focus:ring-0"
             aria-label="Presentation title"
           />
           <div className="flex shrink-0 items-center gap-0.5 border-l border-[#EDECEC] pl-1 ml-0.5">
@@ -449,7 +549,7 @@ const PresentationHeader = ({
             "disabled:pointer-events-none disabled:opacity-100 disabled:hover:bg-transparent"
           )}
         >
-          <h2 className="min-w-0 flex-1 font-unbounded text-lg w-[450px] leading-snug text-[#101323]">
+          <h2 className="min-w-0 flex-1 font-syne text-lg w-[450px] leading-snug text-[#101323]">
             <MarkdownRenderer
               content={presentationData?.title || "Presentation"}
               className="mb-0 min-w-0 overflow-hidden text-ellipsis line-clamp-1 text-sm text-[#101323] prose-p:my-0 prose-headings:my-0"
@@ -469,7 +569,7 @@ const PresentationHeader = ({
   return (
     <>
       <div className="py-[18px] px-4 sticky top-0 bg-white z-50 shadow-sm font-syne flex justify-between items-center gap-4">
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           <img
             onClick={() => {
               router.push("/dashboard");
@@ -483,23 +583,60 @@ const PresentationHeader = ({
           ) : (
             titleBlock
           )}
+         
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex shrink-0 items-center gap-2.5">
+          {generationMode === "smart" && generationMetrics ? (
+            <StreamingGenerationMetrics metrics={generationMetrics} />
+          ) : null}
           {isPresentationSaving && (
             <div className="flex items-center gap-2">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
             </div>
           )}
-          {presentationData &&
-            presentationData.slides &&
-            !presentationData.slides[0].layout.includes("custom") && (
-              <ThemeSelector
-                current_theme={presentationData?.theme || {}}
-                themes={themes}
-              />
-            )}
-
+          {generationMode === "smart" && !isStreaming && (
+            <ToolTip
+              content={
+                enableHtmlSelector
+                  ? "Element selection is on"
+                  : "Click a slide element to add it to AI chat"
+              }
+            >
+              <button
+                type="button"
+                data-testid="html-selector-btn"
+                onClick={toggleHtmlSelector}
+                aria-pressed={enableHtmlSelector}
+                className={cn(
+                  "hidden h-[38px] items-center gap-2 rounded-xl border px-3 font-syne text-xs font-semibold shadow-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6D5DFB] focus-visible:ring-offset-2 xl:inline-flex",
+                  enableHtmlSelector
+                    ? "border-[#CEC6FF] bg-[#F3F0FF] text-[#5141E5]"
+                    : "border-[#E4E4E8] bg-white text-[#3D3D48] hover:border-[#D7D2F5] hover:bg-[#FAF9FF] hover:text-[#5141E5]"
+                )}
+              >
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "flex h-6 w-6 items-center justify-center rounded-lg transition-colors",
+                    enableHtmlSelector
+                      ? "bg-[#6D5DFB] text-white"
+                      : "bg-[#F1EFFF] text-[#6553E8]"
+                  )}
+                >
+                  <MousePointer2 className="h-3.5 w-3.5" strokeWidth={2} />
+                </span>
+                <span className="whitespace-nowrap">Select to edit</span>
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "ml-0.5 h-1.5 w-1.5 rounded-full transition-colors",
+                    enableHtmlSelector ? "bg-[#6D5DFB]" : "bg-[#B8B8C2]"
+                  )}
+                />
+              </button>
+            </ToolTip>
+          )}
           <div className="flex items-center gap-2 bg-[#F6F6F9] px-3.5 h-[38px] border border-[#EDECEC] rounded-[80px]">
             <ToolTip content="Regenerate Presentation">
               <button
@@ -540,12 +677,13 @@ const PresentationHeader = ({
                 onClick={() => {
                   const to = `?id=${presentation_id}&mode=present&slide=${
                     currentSlide || 0
-                  }`;
+                  }${generationMode === "smart" ? "&type=smart" : ""}`;
                   trackEvent(MixpanelEvent.Presentation_Mode_Entered, {
                     pathname,
                     presentation_id,
                     slide_index: currentSlide || 0,
                     slide_count: presentationData?.slides?.length || 0,
+                    generation_mode: generationMode,
                   });
                   trackEvent(MixpanelEvent.Navigation, { from: pathname, to });
                   router.push(to);
@@ -561,6 +699,26 @@ const PresentationHeader = ({
               </button>
             </ToolTip>
           </div>
+
+        {generationMode === "standard" && (
+          <ToolTip content="Keyboard shortcuts (?)">
+            <button
+              type="button"
+              aria-label="Keyboard shortcuts"
+              aria-haspopup="dialog"
+              aria-expanded={shortcutsDialogOpen}
+              aria-keyshortcuts="?"
+              data-testid="keyboard-shortcuts-btn"
+              className="inline-flex h-[38px] w-[38px] items-center justify-center rounded-full border border-[#EDECEC] bg-[#F6F6F9] text-[#101323] transition-colors hover:border-[#D8D3FE] hover:bg-[#F0EDFF] hover:text-[#6847F4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7A5AF8] focus-visible:ring-offset-2"
+              onClick={() => setShortcutsDialogOpen(true)}
+            >
+              <Keyboard
+                aria-hidden="true"
+                className="size-4"
+                strokeWidth={1.8}
+              />
+            </button>
+          </ToolTip>)}
 
           <Popover open={open} onOpenChange={setOpen}>
             <PopoverTrigger asChild>
@@ -626,6 +784,10 @@ const PresentationHeader = ({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <KeyboardShortcutsDialog
+        open={shortcutsDialogOpen}
+        onOpenChange={setShortcutsDialogOpen}
+      />
     </>
   );
 };

@@ -1,7 +1,11 @@
 "use client";
 import React, { useEffect, useState } from "react";
 import { Switch } from "@/components/ui/switch";
-import { setTelemetryEnabled } from "@/utils/mixpanel";
+import {
+  MixpanelEvent,
+  setTelemetryEnabled,
+  trackEventImmediately,
+} from "@/utils/mixpanel";
 import { Loader2 } from "lucide-react";
 
 const PrivacySettings = () => {
@@ -11,9 +15,9 @@ const PrivacySettings = () => {
   useEffect(() => {
     async function fetchStatus() {
       try {
-        const data = window.electron?.telemetryStatus
-          ? await window.electron.telemetryStatus()
-          : await fetch("/api/telemetry-status").then((res) => res.json());
+        const response = await fetch("/api/telemetry-status");
+        if (!response.ok) throw new Error(`telemetry-status returned ${response.status}`);
+        const data = await response.json();
         setTrackingEnabled(data.telemetryEnabled);
       } catch {
         setTrackingEnabled(true);
@@ -25,21 +29,25 @@ const PrivacySettings = () => {
   const handleTrackingToggle = async (enabled: boolean) => {
     const prev = trackingEnabled;
     setTrackingEnabled(enabled);
-    setTelemetryEnabled(enabled);
     setSaving(true);
     try {
-      if (window.electron?.setUserConfig) {
-        await window.electron.setUserConfig({
-          DISABLE_ANONYMOUS_TRACKING: enabled ? undefined : "true",
-        } as any);
-      } else {
-        await fetch("/api/user-config", {
-          method: "POST",
-          body: JSON.stringify({
-            DISABLE_ANONYMOUS_TRACKING: enabled ? undefined : "true",
-          }),
-        });
+      if (!enabled) {
+        try {
+          await trackEventImmediately(MixpanelEvent.Usage_Analytics_Disabled, {
+            source: "settings",
+          });
+        } catch {
+          // Analytics failures must not prevent the user from opting out.
+        }
       }
+      setTelemetryEnabled(enabled);
+      const response = await fetch("/api/user-config", {
+        method: "POST",
+        body: JSON.stringify({
+          DISABLE_ANONYMOUS_TRACKING: enabled ? "false" : "true",
+        }),
+      });
+      if (!response.ok) throw new Error(`user-config returned ${response.status}`);
     } catch {
       setTrackingEnabled(prev);
       setTelemetryEnabled(prev ?? true);

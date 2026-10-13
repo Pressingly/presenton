@@ -1,19 +1,53 @@
 import { Theme } from "@/app/(presentation-generator)/services/api/types";
 import { Slide } from "@/app/(presentation-generator)/types/slide";
+import type { TemplateTheme } from "@/lib/template-theme";
+import {
+  limitOutlines,
+  MAX_NUMBER_OF_SLIDES,
+} from "@/utils/presentationLimits";
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 
 export interface PresentationData {
   id: string;
+
   language: string;
-  layout: {
-    name: string;
-    ordered: boolean;
-    slides: any[];
-  };
+  layout: any;
   n_slides: number;
   title: string;
   slides: any;
-  theme: Theme | null;
+  theme: Theme | TemplateTheme | null;
+  template_id?: string | null;
+  design_v2_id?: string | null;
+  version?: string;
+  generation_mode?: "standard" | "smart";
+  type?: "standard" | "smart";
+  community_design_ids?: number[] | null;
+  components?: any;
+  fonts?: any;
+  structure?: any;
+}
+
+export interface ChatHtmlSelection {
+  slideId?: string | null;
+  slideIndex: number;
+  slideNumber: number;
+  html: string;
+  elementTag?: string | null;
+  selectedText?: string;
+  selectedAt: number;
+}
+
+export interface GenerationMetrics {
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  thinking_tokens: number | null;
+  total_tokens: number;
+  tokens_per_second: number;
+  duration_seconds: number;
+  estimated: boolean;
+  thinking_tokens_estimated: boolean;
+  supports_thinking: boolean;
 }
 
 interface PresentationGenerationState {
@@ -23,8 +57,11 @@ interface PresentationGenerationState {
   outlines: { content: string }[];
   error: string | null;
   presentationData: PresentationData | null;
+  generationMetrics: GenerationMetrics | null;
   isSlidesRendered: boolean;
   isLayoutLoading: boolean;
+  enableHtmlSelector: boolean;
+  chatHtmlSelection: ChatHtmlSelection | null;
 }
 
 const initialState: PresentationGenerationState = {
@@ -36,6 +73,9 @@ const initialState: PresentationGenerationState = {
   isStreaming: null,
   error: null,
   presentationData: null,
+  generationMetrics: null,
+  enableHtmlSelector: false,
+  chatHtmlSelection: null,
 };
 
 const presentationGenerationSlice = createSlice({
@@ -54,6 +94,9 @@ const presentationGenerationSlice = createSlice({
     },
     // Presentation ID
     setPresentationId: (state, action: PayloadAction<string>) => {
+      if (state.presentation_id !== action.payload) {
+        state.chatHtmlSelection = null;
+      }
       state.presentation_id = action.payload;
       state.error = null;
     },
@@ -69,17 +112,39 @@ const presentationGenerationSlice = createSlice({
     // Clear presentation data
     clearPresentationData: (state) => {
       state.presentationData = null;
+      state.generationMetrics = null;
+      state.chatHtmlSelection = null;
+    },
+    setGenerationMetrics: (
+      state,
+      action: PayloadAction<GenerationMetrics | null>
+    ) => {
+      state.generationMetrics = action.payload;
     },
     clearOutlines: (state) => {
       state.outlines = [];
     },
     // Set outlines
     setOutlines: (state, action: PayloadAction<{ content: string }[]>) => {
-      state.outlines = action.payload;
+      state.outlines = limitOutlines(action.payload);
     },
     // Set presentation data
     setPresentationData: (state, action: PayloadAction<PresentationData>) => {
       state.presentationData = action.payload;
+      state.chatHtmlSelection = null;
+    },
+    setEnableHtmlSelector: (state, action: PayloadAction<boolean>) => {
+      state.enableHtmlSelector = action.payload;
+      if (!action.payload) state.chatHtmlSelection = null;
+    },
+    setChatHtmlSelection: (
+      state,
+      action: PayloadAction<ChatHtmlSelection>
+    ) => {
+      state.chatHtmlSelection = action.payload;
+    },
+    clearChatHtmlSelection: (state) => {
+      state.chatHtmlSelection = null;
     },
     updateTitle: (state, action: PayloadAction<string>) => {
       if (state.presentationData) {
@@ -100,6 +165,10 @@ const presentationGenerationSlice = createSlice({
       action: PayloadAction<{ slide: Slide; index: number }>
     ) => {
       if (state.presentationData?.slides) {
+        if (state.presentationData.slides.length >= MAX_NUMBER_OF_SLIDES) {
+          return;
+        }
+
         // Insert the new slide at the specified index
         state.presentationData.slides.splice(
           action.payload.index,
@@ -114,6 +183,7 @@ const presentationGenerationSlice = createSlice({
             index: idx,
           })
         );
+        state.presentationData.n_slides = state.presentationData.slides.length;
       }
     },
     deletePresentationSlide: (state, action: PayloadAction<number>) => {
@@ -134,6 +204,72 @@ const presentationGenerationSlice = createSlice({
             index: idx,
           })
         );
+        state.presentationData.n_slides = state.presentationData.slides.length;
+      }
+    },
+    replaceSlidesWithBlankFallback: (
+      state,
+      action: PayloadAction<{ slideData: any }>
+    ) => {
+      if (state.presentationData) {
+        state.presentationData.slides = [
+          { ...action.payload.slideData, index: 0 },
+        ];
+        state.presentationData.n_slides = 1;
+      }
+    },
+    duplicatePresentationSlide: (
+      state,
+      action: PayloadAction<{ index: number; slideId: string }>
+    ) => {
+      if (state.presentationData?.slides) {
+        const slides = state.presentationData.slides;
+        if (slides.length >= MAX_NUMBER_OF_SLIDES) {
+          return;
+        }
+
+        const sourceSlide = slides[action.payload.index];
+        if (!sourceSlide) {
+          return;
+        }
+
+        const duplicatedSlide = {
+          ...JSON.parse(JSON.stringify(sourceSlide)),
+          id: action.payload.slideId,
+          index: action.payload.index + 1,
+        };
+
+        slides.splice(action.payload.index + 1, 0, duplicatedSlide);
+        state.presentationData.slides = slides.map((slide: any, idx: number) => ({
+          ...slide,
+          index: idx,
+        }));
+        state.presentationData.n_slides = state.presentationData.slides.length;
+      }
+    },
+    movePresentationSlide: (
+      state,
+      action: PayloadAction<{ fromIndex: number; toIndex: number }>
+    ) => {
+      if (state.presentationData?.slides) {
+        const slides = state.presentationData.slides;
+        const { fromIndex, toIndex } = action.payload;
+        if (
+          fromIndex === toIndex ||
+          fromIndex < 0 ||
+          toIndex < 0 ||
+          fromIndex >= slides.length ||
+          toIndex >= slides.length
+        ) {
+          return;
+        }
+
+        const [movedSlide] = slides.splice(fromIndex, 1);
+        slides.splice(toIndex, 0, movedSlide);
+        state.presentationData.slides = slides.map((slide: any, idx: number) => ({
+          ...slide,
+          index: idx,
+        }));
       }
     },
     updateSlide: (
@@ -146,6 +282,37 @@ const presentationGenerationSlice = createSlice({
       ) {
         state.presentationData.slides[action.payload.index] =
           action.payload.slide;
+      }
+    },
+    updateSlideHtmlContent: (
+      state,
+      action: PayloadAction<{
+        slideIndex: number;
+        html: string;
+        slideId?: string | null;
+      }>
+    ) => {
+      const slides = state.presentationData?.slides;
+      if (!Array.isArray(slides)) return;
+
+      const slide =
+        (action.payload.slideId
+          ? slides.find((item: Slide) => item.id === action.payload.slideId)
+          : undefined) ??
+        slides.find((item: Slide) => item.index === action.payload.slideIndex) ??
+        slides[action.payload.slideIndex];
+      if (slide) slide.html_content = action.payload.html;
+    },
+    updateSlideUi: (
+      state,
+      action: PayloadAction<{ index: number; ui: Record<string, unknown> | null }>
+    ) => {
+      if (
+        state.presentationData &&
+        state.presentationData.slides[action.payload.index]
+      ) {
+        state.presentationData.slides[action.payload.index].ui =
+          action.payload.ui;
       }
     },
 
@@ -208,6 +375,10 @@ const presentationGenerationSlice = createSlice({
 
     addNewSlide: (state, action: PayloadAction<{ slideData: any; index: number }>) => {
       if (state.presentationData?.slides) {
+        if (state.presentationData.slides.length >= MAX_NUMBER_OF_SLIDES) {
+          return;
+        }
+
         // Insert the new slide at the specified index + 1 (after current slide)
         state.presentationData.slides.splice(action.payload.index + 1, 0, action.payload.slideData);
 
@@ -218,6 +389,7 @@ const presentationGenerationSlice = createSlice({
             index: idx,
           })
         );
+        state.presentationData.n_slides = state.presentationData.slides.length;
       }
     },
 
@@ -410,15 +582,24 @@ export const {
   setSlidesRendered,
   setError,
   clearPresentationData,
+  setGenerationMetrics,
   clearOutlines,
   deleteSlideOutline,
   setPresentationData,
+  setEnableHtmlSelector,
+  setChatHtmlSelection,
+  clearChatHtmlSelection,
   updateTitle,
   setOutlines,
   // slides operations
   addSlide,
   updateSlide,
+  updateSlideHtmlContent,
+  updateSlideUi,
   deletePresentationSlide,
+  replaceSlidesWithBlankFallback,
+  duplicatePresentationSlide,
+  movePresentationSlide,
   updateSlideContent,
   updateSlideImage,
   updateImageProperties,

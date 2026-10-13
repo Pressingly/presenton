@@ -1,4 +1,11 @@
 import os
+from typing import Literal
+
+
+PresentationGenerationMode = Literal["both", "standard", "smart"]
+
+DEFAULT_PRESENTON_OAUTH_ISSUER = "https://api.presenton.ai"
+DEFAULT_PRESENTON_OAUTH_CLIENT_ID = "ptc_presenton_open_source"
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -9,6 +16,29 @@ def _is_truthy(value: str | None) -> bool:
 
 def get_can_change_keys_env():
     return os.getenv("CAN_CHANGE_KEYS")
+
+
+def get_presenton_public_url() -> str | None:
+    value = (os.getenv("PRESENTON_PUBLIC_URL") or "").strip().rstrip("/")
+    if value.startswith(("http://", "https://")):
+        return value
+    return None
+
+
+def get_presentation_generation_mode() -> PresentationGenerationMode:
+    """Return the enabled generation mode, matching the web UI's fallback."""
+    value = (os.getenv("PRESENTATION_GENERATION_MODE") or "").strip().lower()
+    if value in {"standard", "smart", "both"}:
+        return value
+    return "both"
+
+
+def is_community_enabled() -> bool:
+    """Return whether cloud-backed community features are available."""
+    value = (os.getenv("PRESENTON_COMMUNITY_ENABLED") or "").strip().lower()
+    if not value:
+        return True
+    return value not in {"0", "false", "no", "off"}
 
 
 def get_database_url_env():
@@ -42,8 +72,21 @@ def get_disable_auth_env():
     return os.getenv("DISABLE_AUTH")
 
 
+def get_presenton_oauth_issuer() -> str:
+    return DEFAULT_PRESENTON_OAUTH_ISSUER
+
+
+def get_presenton_oauth_client_id() -> str:
+    return DEFAULT_PRESENTON_OAUTH_CLIENT_ID
+
+
 def is_disable_auth_enabled():
     return _is_truthy(get_disable_auth_env())
+
+
+def is_presenton_electron_desktop():
+    """True when running inside the Presenton Electron desktop app."""
+    return _is_truthy(os.getenv("PRESENTON_ELECTRON"))
 
 
 def get_llm_provider_env():
@@ -64,6 +107,18 @@ def get_ollama_url_env():
 
 def get_custom_llm_url_env():
     return os.getenv("CUSTOM_LLM_URL")
+
+
+def get_deepseek_base_url_env():
+    return os.getenv("DEEPSEEK_BASE_URL")
+
+
+def get_deepseek_api_key_env():
+    return os.getenv("DEEPSEEK_API_KEY")
+
+
+def get_deepseek_model_env():
+    return os.getenv("DEEPSEEK_MODEL")
 
 
 def get_openai_api_key_env():
@@ -166,6 +221,26 @@ def get_openrouter_base_url_env():
     return os.getenv("OPENROUTER_BASE_URL")
 
 
+def get_openrouter_provider_order_env():
+    return os.getenv("OPENROUTER_PROVIDER_ORDER")
+
+
+def get_openrouter_allow_fallbacks_env():
+    return os.getenv("OPENROUTER_ALLOW_FALLBACKS")
+
+
+def get_openrouter_require_parameters_env():
+    return os.getenv("OPENROUTER_REQUIRE_PARAMETERS")
+
+
+def get_openrouter_data_collection_env():
+    return os.getenv("OPENROUTER_DATA_COLLECTION")
+
+
+def get_openrouter_zdr_env():
+    return os.getenv("OPENROUTER_ZDR")
+
+
 def get_fireworks_api_key_env():
     return os.getenv("FIREWORKS_API_KEY")
 
@@ -246,6 +321,15 @@ def get_disable_image_generation_env():
     return os.getenv("DISABLE_IMAGE_GENERATION")
 
 
+def is_parallel_image_generation_enabled() -> bool:
+    """Whether image provider requests may run concurrently.
+
+    Parallel generation is the existing behavior, so it remains enabled unless
+    ENABLE_PARALLEL_IMAGE_GENERATION is explicitly set to a falsey value.
+    """
+    return _is_truthy(os.getenv("ENABLE_PARALLEL_IMAGE_GENERATION", "true"))
+
+
 def get_image_provider_env():
     return os.getenv("IMAGE_PROVIDER")
 
@@ -262,8 +346,56 @@ def get_extended_reasoning_env():
     return os.getenv("EXTENDED_REASONING")
 
 
+def get_llm_generation_profile_env():
+    return os.getenv("LLM_GENERATION_PROFILE")
+
+
+def get_llm_max_output_tokens_env():
+    return os.getenv("LLM_MAX_OUTPUT_TOKENS")
+
+
+def get_llm_reasoning_mode_env():
+    return os.getenv("LLM_REASONING_MODE")
+
+
+def get_llm_reasoning_effort_env():
+    return os.getenv("LLM_REASONING_EFFORT")
+
+
+def get_llm_reasoning_budget_tokens_env():
+    return os.getenv("LLM_REASONING_BUDGET_TOKENS")
+
+
 def get_web_grounding_env():
     return os.getenv("WEB_GROUNDING")
+
+
+def get_web_search_provider_env():
+    return os.getenv("WEB_SEARCH_PROVIDER")
+
+
+def get_web_search_max_results_env():
+    return os.getenv("WEB_SEARCH_MAX_RESULTS")
+
+
+def get_searxng_base_url_env():
+    return os.getenv("SEARXNG_BASE_URL")
+
+
+def get_tavily_api_key_env():
+    return os.getenv("TAVILY_API_KEY")
+
+
+def get_exa_api_key_env():
+    return os.getenv("EXA_API_KEY")
+
+
+def get_brave_search_api_key_env():
+    return os.getenv("BRAVE_SEARCH_API_KEY")
+
+
+def get_serper_api_key_env():
+    return os.getenv("SERPER_API_KEY")
 
 
 def get_comfyui_url_env():
@@ -318,7 +450,7 @@ def get_codex_model_env():
 
 
 def get_migrate_database_on_startup_env():
-    return os.getenv("MIGRATE_DATABASE_ON_STARTUP")
+    return os.getenv("MIGRATE_DATABASE_ON_STARTUP", "true")
 
 
 def get_sentry_dsn_env():

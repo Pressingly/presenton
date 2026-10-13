@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { RootState } from "@/store/store";
 import "@/app/(presentation-generator)/utils/prism-languages";
@@ -15,7 +15,13 @@ import { ApiResponseHandler } from "@/app/(presentation-generator)/services/api/
 import { useFontLoader } from "@/app/(presentation-generator)/hooks/useFontLoad";
 import { Theme } from "@/app/(presentation-generator)/services/api/types";
 import SlideScale from "@/app/(presentation-generator)/components/PresentationRender";
+import {
+  shouldRenderTemplateV2HtmlPreview,
+  TemplateV2HtmlSlidePreview,
+} from "@/app/(presentation-generator)/components/TemplateV2HtmlSlidePreview";
 import { normalizeBackendAssetUrls } from "@/utils/api";
+import { ensureTailwindBrowserScript } from "@/lib/tailwind-browser";
+import { useSmartChartInjection } from "@/app/(presentation-generator)/components/useSmartChartInjection";
 
 const PDF_PRINT_STYLE = `
   html,
@@ -33,11 +39,16 @@ const PDF_PRINT_STYLE = `
     gap: 0 !important;
   }
 
-  #presentation-slides-wrapper .slides-export-stack {
+  #presentation-slides-wrapper {
     width: 100% !important;
     display: flex !important;
     flex-direction: column !important;
-    align-items: center !important;
+    /*
+     * export-core measures PPTX elements in a 3000px-wide viewport. Keep the
+     * 1280px slide canvas at x=0 so its clipping rectangle and child element
+     * coordinates share the same origin.
+     */
+    align-items: flex-start !important;
     gap: 0 !important;
     margin: 0 !important;
     padding: 0 !important;
@@ -93,14 +104,50 @@ type PresentationPageProps = {
   exportCookie?: string;
 };
 
+const SmartHtmlPdfSlide = ({
+  slide,
+  index,
+}: {
+  slide: { id?: string | null; index?: number; html_content?: string | null };
+  index: number;
+}) => {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const html = slide.html_content?.trim() ?? "";
+  const instanceId = useMemo(
+    () => `pdf-smart-${slide.id ?? index}`,
+    [index, slide.id]
+  );
+
+  useSmartChartInjection({
+    html,
+    instanceId,
+    domRevision: `${slide.index ?? "none"}:${index}`,
+    containerRef,
+  });
+
+  return (
+    <div className="smart-slide-export-root h-[720px] w-[1280px] overflow-hidden bg-white">
+      <div className="smart-slide-export-content h-[720px] w-[1280px] overflow-hidden bg-white">
+        <div
+          ref={containerRef}
+          data-smart-slide-instance={instanceId}
+          data-tailwind-runtime-scope
+          className="h-[720px] w-[1280px] overflow-hidden bg-white"
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      </div>
+    </div>
+  );
+};
+
 const PresentationPage = ({ presentation_id, exportCookie }: PresentationPageProps) => {
   const pathname = usePathname();
   const [contentLoading, setContentLoading] = useState(true);
   const exportCookieFromHash =
     typeof window !== "undefined"
       ? new URLSearchParams(window.location.hash.replace(/^#/, "")).get(
-          "exportCookie"
-        ) ?? undefined
+        "exportCookie"
+      ) ?? undefined
       : undefined;
   const effectiveExportCookie = exportCookie ?? exportCookieFromHash;
 
@@ -111,16 +158,14 @@ const PresentationPage = ({ presentation_id, exportCookie }: PresentationPagePro
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    if (presentationData?.slides?.[0]?.layout?.includes("custom")) {
-      const existingScript = document.querySelector(
-        'script[src*="tailwindcss.com"]'
-      );
-      if (!existingScript) {
-        const script = document.createElement("script");
-        script.src = "https://cdn.tailwindcss.com";
-        script.async = true;
-        document.head.appendChild(script);
-      }
+    if (
+      presentationData?.slides?.some(
+        (slide: any) =>
+          slide?.layout?.includes("custom") ||
+          (typeof slide?.html_content === "string" && slide.html_content.trim())
+      )
+    ) {
+      ensureTailwindBrowserScript();
     }
   }, [presentationData]);
   useEffect(() => {
@@ -245,7 +290,7 @@ const PresentationPage = ({ presentation_id, exportCookie }: PresentationPagePro
           <style jsx global>{PDF_PRINT_STYLE}</style>
           <div
             id="presentation-slides-wrapper"
-            className="relative m-0 flex w-full flex-col items-center overflow-visible p-0"
+            className="relative m-0 flex w-full flex-col items-start overflow-visible p-0"
           >
             {isLoading ? (
               <div className="relative m-0 flex w-full justify-center p-0">
@@ -259,8 +304,14 @@ const PresentationPage = ({ presentation_id, exportCookie }: PresentationPagePro
                 </div>
               </div>
             ) : (
-              <div className="slides-export-stack font-inter">
-                {slides.map((slide: any, index: number) => (
+              slides.map((slide: any, index: number) => {
+                const useTemplateV2HtmlPreview =
+                  shouldRenderTemplateV2HtmlPreview(
+                    slide,
+                    presentationData?.version
+                  );
+
+                return (
                   <div
                     key={`${slide.type}-${index}-${slide.index}`}
                     id={`slide-${slide.index}`}
@@ -272,16 +323,27 @@ const PresentationPage = ({ presentation_id, exportCookie }: PresentationPagePro
                       data-layout={slide.layout}
                       data-group={slide.layout_group}
                     >
-                      <SlideScale
-                        slide={slide}
-                        theme={presentationData?.theme ?? null}
-                        isEditMode={false}
-                        fixedSize
-                      />
+                      {useTemplateV2HtmlPreview ? (
+                        <TemplateV2HtmlSlidePreview
+                          slide={slide}
+                          fonts={presentationData?.fonts}
+                          fixedSize
+                        />
+                      ) : typeof slide?.html_content === "string" &&
+                        slide.html_content.trim() ? (
+                        <SmartHtmlPdfSlide slide={slide} index={index} />
+                      ) : (
+                        <SlideScale
+                          slide={slide}
+                          theme={presentationData?.theme ?? null}
+                          isEditMode={false}
+                          fixedSize
+                        />
+                      )}
                     </div>
                   </div>
-                ))}
-              </div>
+                );
+              })
             )}
           </div>
         </>

@@ -1,5 +1,6 @@
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { clampSlideCountValue, MAX_NUMBER_OF_SLIDES } from '@/utils/presentationLimits';
 import React, { useState } from 'react'
 
 const SLIDE_OPTIONS: string[] = ["5", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20"];
@@ -10,11 +11,7 @@ const NumberOfSlide = ({ value, onValueChange }: { value: string, onValueChange:
     );
 
     const sanitizeToPositiveInteger = (raw: string): string => {
-        const digitsOnly = raw.replace(/\D+/g, "");
-        if (!digitsOnly) return "";
-        // Remove leading zeros
-        const noLeadingZeros = digitsOnly.replace(/^0+/, "");
-        return noLeadingZeros;
+        return clampSlideCountValue(raw);
     };
 
     const applyCustomValue = () => {
@@ -26,12 +23,12 @@ const NumberOfSlide = ({ value, onValueChange }: { value: string, onValueChange:
     return (
         <Select value={value || ""} onValueChange={onValueChange} name="slides">
             <SelectTrigger
-                className="w-[180px] font-instrument_sans font-medium bg-blue-100 border-blue-200 focus-visible:ring-blue-300"
+                className="w-[180px] font-manrope font-medium bg-blue-100 border-blue-200 focus-visible:ring-blue-300"
                 data-testid="slides-select"
             >
                 <SelectValue placeholder="Select Slides" />
             </SelectTrigger>
-            <SelectContent className="font-instrument_sans">
+            <SelectContent className="font-manrope">
                 {/* Sticky custom input at the top */}
                 <div
                     className="sticky top-0 z-10 bg-white  p-2 border-b"
@@ -43,6 +40,7 @@ const NumberOfSlide = ({ value, onValueChange }: { value: string, onValueChange:
                         <Input
                             inputMode="numeric"
                             pattern="[0-9]*"
+                            max={MAX_NUMBER_OF_SLIDES}
                             value={customInput}
                             onMouseDown={(e) => e.stopPropagation()}
                             onPointerDown={(e) => e.stopPropagation()}
@@ -76,7 +74,7 @@ const NumberOfSlide = ({ value, onValueChange }: { value: string, onValueChange:
                     <SelectItem
                         key={option}
                         value={option}
-                        className="font-instrument_sans text-sm font-medium"
+                        className="font-manrope text-sm font-medium"
                         role="option"
                     >
                         {option} slides
