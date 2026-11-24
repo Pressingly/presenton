@@ -25,6 +25,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from templates.v2.models.layouts import (
     Component,
+    LayoutGenerationOptions,
     FlexibleFlowItemPlan,
     FlexibleFlowNodePlan,
     FlexibleRegionPlan,
@@ -2896,6 +2897,8 @@ def _compile_semantic_layout(
     manifest: SemanticSlideManifest,
     flexible_plan: FlexibleSlidePlan,
     text_capacity_plan: TextCapacityPlan,
+    *,
+    enable_text_growth: bool = True,
 ) -> SlideLayout:
     source_elements = copy.deepcopy(
         source_layout.model_dump(mode="json", exclude_none=True)["elements"]
@@ -2915,11 +2918,12 @@ def _compile_semantic_layout(
                 element["color"] = annotation.color
             if annotation.is_icon and annotation.icon_type is not None:
                 element["icon_type"] = annotation.icon_type
-    _reserve_single_line_text_overflow_space(
-        source_elements,
-        manifest,
-        text_capacity_plan,
-    )
+    if enable_text_growth:
+        _reserve_single_line_text_overflow_space(
+            source_elements,
+            manifest,
+            text_capacity_plan,
+        )
     _normalize_existing_text_box_limits(source_elements)
     geometry_elements = copy.deepcopy(source_elements)
     vertical_reflow_paths = _fixed_column_vertical_reflow_paths(
@@ -3651,13 +3655,17 @@ def generate_slide_layout(
     fonts: dict[str, str] | None = None,
     *,
     max_tokens: int | None = None,
+    generation_options: LayoutGenerationOptions | None = None,
 ) -> SlideLayout:
     if not source_layout.elements:
         raise ValueError("source slide must contain at least one element")
 
+    options = generation_options or LayoutGenerationOptions()
     image_part = _openai_image_part(slide_image_url)
-    visual_payload, visual_candidate_paths = _visual_data_generation_payload(
-        source_layout
+    visual_payload, visual_candidate_paths = (
+        _visual_data_generation_payload(source_layout)
+        if options.visual_replacement
+        else ({}, set())
     )
     if visual_candidate_paths:
         try:
@@ -3731,84 +3739,89 @@ def generate_slide_layout(
             "fidelity-preserving fallback slide=%d",
             slide_index + 1,
         )
-        return _replace_content_image_urls(_fallback_slide_layout(source_layout))
+        return _replace_content_image_urls(
+            _fallback_slide_layout(source_layout, enable_text_growth=options.text_growth),
+            replace_visuals=options.visual_replacement,
+        )
 
     flexible_plan = FlexibleSlidePlan(regions=[])
-    try:
-        flexible_response = _generate_structured_with_provider_fallback(
-            messages=[
-                SystemMessage(content=GENERATE_FLEXIBLE_REGIONS_SYSTEM_PROMPT),
-                UserMessage(
-                    content=[
-                        image_part,
-                        TextContentPart(
-                            text=json.dumps(
-                                _flexible_generation_payload(source_layout, manifest),
-                                indent=2,
-                            )
-                        ),
-                    ],
+    if options.flexible_grouping:
+        try:
+            flexible_response = _generate_structured_with_provider_fallback(
+                messages=[
+                    SystemMessage(content=GENERATE_FLEXIBLE_REGIONS_SYSTEM_PROMPT),
+                    UserMessage(
+                        content=[
+                            image_part,
+                            TextContentPart(
+                                text=json.dumps(
+                                    _flexible_generation_payload(source_layout, manifest),
+                                    indent=2,
+                                )
+                            ),
+                        ],
+                    ),
+                ],
+                label=f"slide {slide_index + 1} flexible regions",
+                output_model=FlexibleSlidePlan,
+                response_name="FlexibleSlidePlanResponse",
+                validation_retries=DEFAULT_VALIDATION_RETRIES,
+                extra_validator=lambda plan: _validate_flexible_plan(
+                    plan,
+                    manifest=manifest,
+                    source_elements=source_data["elements"],
                 ),
-            ],
-            label=f"slide {slide_index + 1} flexible regions",
-            output_model=FlexibleSlidePlan,
-            response_name="FlexibleSlidePlanResponse",
-            validation_retries=DEFAULT_VALIDATION_RETRIES,
-            extra_validator=lambda plan: _validate_flexible_plan(
-                plan,
-                manifest=manifest,
-                source_elements=source_data["elements"],
-            ),
-            max_tokens=max_tokens,
-        )
-        flexible_plan = FlexibleSlidePlan.model_validate(flexible_response)
-    except Exception:
-        LOGGER.exception(
-            "[templates.v2.generate] flexible-region pass failed; preserving "
-            "the semantic layout slide=%d",
-            slide_index + 1,
-        )
+                max_tokens=max_tokens,
+            )
+            flexible_plan = FlexibleSlidePlan.model_validate(flexible_response)
+        except Exception:
+            LOGGER.exception(
+                "[templates.v2.generate] flexible-region pass failed; preserving "
+                "the semantic layout slide=%d",
+                slide_index + 1,
+            )
 
     text_capacity_plan = TextCapacityPlan(adjustments=[])
-    try:
-        text_capacity_response = _generate_structured_with_provider_fallback(
-            messages=[
-                SystemMessage(content=GENERATE_TEXT_CAPACITY_SYSTEM_PROMPT),
-                UserMessage(
-                    content=[
-                        image_part,
-                        TextContentPart(
-                            text=json.dumps(
-                                _text_capacity_generation_payload(
-                                    source_layout,
-                                    manifest,
-                                    flexible_plan,
-                                ),
-                                indent=2,
-                            )
-                        ),
-                    ],
+    if options.text_growth:
+        try:
+            text_capacity_response = _generate_structured_with_provider_fallback(
+                messages=[
+                    SystemMessage(content=GENERATE_TEXT_CAPACITY_SYSTEM_PROMPT),
+                    UserMessage(
+                        content=[
+                            image_part,
+                            TextContentPart(
+                                text=json.dumps(
+                                    _text_capacity_generation_payload(
+                                        source_layout,
+                                        manifest,
+                                        flexible_plan,
+                                    ),
+                                    indent=2,
+                                )
+                            ),
+                        ],
+                    ),
+                ],
+                label=f"slide {slide_index + 1} text capacity",
+                output_model=TextCapacityPlan,
+                response_name="TextCapacityPlanResponse",
+                validation_retries=DEFAULT_VALIDATION_RETRIES,
+                extra_validator=lambda plan: _validate_text_capacity_plan(
+                    plan,
+                    manifest=manifest,
+                    flexible_plan=flexible_plan,
+                    source_elements=source_data["elements"],
                 ),
-            ],
-            label=f"slide {slide_index + 1} text capacity",
-            output_model=TextCapacityPlan,
-            response_name="TextCapacityPlanResponse",
-            validation_retries=DEFAULT_VALIDATION_RETRIES,
-            extra_validator=lambda plan: _validate_text_capacity_plan(
-                plan,
-                manifest=manifest,
-                flexible_plan=flexible_plan,
-                source_elements=source_data["elements"],
-            ),
-            max_tokens=max_tokens,
-        )
-        text_capacity_plan = TextCapacityPlan.model_validate(text_capacity_response)
-    except Exception:
-        LOGGER.exception(
-            "[templates.v2.generate] text-capacity pass failed; preserving "
-            "validated semantic and flexible decisions slide=%d",
-            slide_index + 1,
-        )
+                max_tokens=max_tokens,
+            )
+            text_capacity_plan = TextCapacityPlan.model_validate(text_capacity_response)
+        except Exception:
+            LOGGER.exception(
+                "[templates.v2.generate] text-capacity pass failed; preserving "
+                "validated semantic and flexible decisions slide=%d",
+                slide_index + 1,
+            )
 
     compile_attempts = [
         (flexible_plan, text_capacity_plan),
@@ -3834,6 +3847,7 @@ def generate_slide_layout(
                 manifest,
                 candidate_flexible,
                 candidate_capacity,
+                enable_text_growth=options.text_growth,
             )
         except Exception:
             LOGGER.exception(
@@ -3844,40 +3858,54 @@ def generate_slide_layout(
                 bool(candidate_capacity.adjustments),
             )
             continue
-        return _replace_content_image_urls(layout)
+        return _replace_content_image_urls(layout, replace_visuals=options.visual_replacement)
 
     LOGGER.error(
         "[templates.v2.generate] all compile certifications failed; using "
         "fidelity-preserving fallback slide=%d",
         slide_index + 1,
     )
-    return _replace_content_image_urls(_fallback_slide_layout(source_layout))
+    return _replace_content_image_urls(
+        _fallback_slide_layout(source_layout, enable_text_growth=options.text_growth),
+        replace_visuals=options.visual_replacement,
+    )
 
 
-def _fallback_slide_layout(source_layout: RawSlideLayout) -> SlideLayout:
+def _fallback_slide_layout(
+    source_layout: RawSlideLayout, *, enable_text_growth: bool = True
+) -> SlideLayout:
     return _compile_semantic_layout(
         source_layout,
         _fallback_semantic_manifest(source_layout),
         FlexibleSlidePlan(regions=[]),
         TextCapacityPlan(adjustments=[]),
+        enable_text_growth=enable_text_growth,
     )
 
 
-def _replace_content_image_urls(layout: SlideLayout) -> SlideLayout:
+def _replace_content_image_urls(
+    layout: SlideLayout, *, replace_visuals: bool = True
+) -> SlideLayout:
     normalized = layout.model_copy(deep=True)
     for component in normalized.components:
-        _replace_content_image_urls_in_elements(component.elements)
+        _replace_content_image_urls_in_elements(component.elements, replace_visuals=replace_visuals)
     return normalized
 
 
-def _replace_content_image_urls_in_elements(elements: list[Any]) -> None:
+def _replace_content_image_urls_in_elements(
+    elements: list[Any], *, replace_visuals: bool = True
+) -> None:
     for element in elements:
-        _replace_content_image_url_in_element(element)
+        _replace_content_image_url_in_element(element, replace_visuals=replace_visuals)
 
 
-def _replace_content_image_url_in_element(element: Any) -> None:
+def _replace_content_image_url_in_element(
+    element: Any, *, replace_visuals: bool = True
+) -> None:
     if isinstance(element, SlideImageElement) and element.decorative is False:
-        if element.is_icon:
+        if not replace_visuals:
+            element.decorative = True
+        elif element.is_icon:
             element.data = CONTENT_ICON_PLACEHOLDER_URL
         else:
             element.data = CONTENT_IMAGE_PLACEHOLDER_URL
@@ -3885,11 +3913,11 @@ def _replace_content_image_url_in_element(element: Any) -> None:
 
     child = getattr(element, "child", None)
     if child is not None:
-        _replace_content_image_url_in_element(child)
+        _replace_content_image_url_in_element(child, replace_visuals=replace_visuals)
 
     children = getattr(element, "children", None)
     if isinstance(children, list):
-        _replace_content_image_urls_in_elements(children)
+        _replace_content_image_urls_in_elements(children, replace_visuals=replace_visuals)
 
 
 def _strip_decorative_fields(value: Any) -> Any:

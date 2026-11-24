@@ -4,7 +4,7 @@ import shutil
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.v1.auth.schemas import (
@@ -24,7 +24,6 @@ from api.v1.auth.users import (
 )
 from models.sql.user import User
 from models.sql.api_key import ApiKey
-from models.sql.key_value import KeyValueSqlModel
 from services.database import get_async_session
 from services.provider_settings import get_provider_settings, save_provider_settings
 from services.presenton_cloud import get_presenton_provider, has_cloud_credentials
@@ -32,7 +31,6 @@ from services.api_keys import issue_api_key, reveal_api_key
 from utils.datetime_utils import get_current_utc_datetime
 from utils.get_env import (
     get_app_data_directory_env,
-    get_can_change_keys_env,
     get_temp_directory_env,
     get_presenton_oauth_issuer,
     is_disable_auth_enabled,
@@ -143,20 +141,11 @@ async def require_settings_admin(
         raise HTTPException(status_code=403, detail="Admin access required")
 
 
-def _ensure_settings_are_mutable() -> None:
-    if get_can_change_keys_env() == "false":
-        raise HTTPException(
-            status_code=403,
-            detail="You are not allowed to access this resource",
-        )
-
-
 @API_V1_ADMIN_ROUTER.get("/provider-settings")
 async def read_provider_settings(
     _: None = Depends(require_settings_admin),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict[str, Any]:
-    _ensure_settings_are_mutable()
     settings = await get_provider_settings(session)
     provider = await get_presenton_provider(session, get_presenton_oauth_issuer())
     return {
@@ -172,7 +161,6 @@ async def update_provider_settings(
     _: None = Depends(require_settings_admin),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict[str, Any]:
-    _ensure_settings_are_mutable()
     saved = await save_provider_settings(session, config)
     update_env_with_user_config()
     return saved
@@ -259,11 +247,6 @@ async def delete_user(
             status_code=403,
             detail="The primary administrator account cannot be deleted",
         )
-    await session.execute(
-        delete(KeyValueSqlModel).where(
-            KeyValueSqlModel.key == f"presentation_custom_themes:{user.id}"
-        )
-    )
     await session.delete(user)
     await session.commit()
     roots = (

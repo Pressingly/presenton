@@ -1,5 +1,5 @@
 require("dotenv").config();
-import { app, BrowserWindow, dialog, globalShortcut } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, session } from "electron";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
@@ -52,6 +52,7 @@ import {
 } from "./utils/export-chromium";
 import { syncUserConfigFromEnv } from "./utils/user-config-env";
 import { resolveExportRuntimeRoot } from "./utils/export-msix-runtime";
+import { initializeDesktopSession } from "./utils/desktop-auth";
 
 installSafeConsole();
 
@@ -367,7 +368,6 @@ async function startServers(fastApiPort: number, nextjsPort: number) {
         // The child inherits process.env, including every provider supported by
         // Docker. Keep only Electron-specific overrides here.
         DEBUG: isDev ? "True" : "False",
-        CAN_CHANGE_KEYS: process.env.CAN_CHANGE_KEYS,
         APP_DATA_DIRECTORY: appDataDir,
         TEMP_DIRECTORY: tempDir,
         USER_CONFIG_PATH: userConfigPath,
@@ -468,6 +468,10 @@ app.whenReady().then(async () => {
   const [fastApiPort, nextjsPort] = await findUnusedPorts();
   safeLog(`FastAPI port: ${fastApiPort}, NextJS port: ${nextjsPort}`);
   setupEnv(fastApiPort, nextjsPort);
+  await initializeDesktopSession(session.defaultSession, [
+    `${localhost}:${nextjsPort}`,
+    `${localhost}:${fastApiPort}`,
+  ]);
   setupIpcHandlers();
 
   await finishChromiumCacheRecovery(
@@ -480,9 +484,7 @@ app.whenReady().then(async () => {
   createWindow(`${localhost}:${nextjsPort}`);
 
   try {
-    if (process.env.CAN_CHANGE_KEYS !== "false") {
-      syncUserConfigFromEnv();
-    }
+    syncUserConfigFromEnv();
   } catch (error) {
     safeWarn("[Presenton] Failed to persist startup user config", error);
   }

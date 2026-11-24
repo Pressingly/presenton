@@ -9,18 +9,6 @@ import { getHeader } from "./header";
 
 const TEMPLATE_THEME_CACHE_TTL_MS = 5 * 60 * 1000;
 
-export interface CloneTemplatePayload {
-    id: string;
-    name?: string;
-    description?: string;
-}
-
-export interface CloneLayoutPayload {
-    template_id: string;
-    layout_id: string;
-    layout_name?: string;
-}
-
 export interface CreateTemplatePayload {
     pptx_url: string;
     slide_image_urls: string[];
@@ -94,13 +82,6 @@ export interface UpdateTemplatePayload extends Partial<TemplateDetailsResponse> 
     id: string;
 }
 
-export interface UpdateTemplateLayoutsPayload {
-    layouts: Array<{
-        index: number;
-        layout: unknown;
-    }>;
-}
-
 export interface CreateTemplateLayoutPayload {
     template_id: string;
     index: number;
@@ -136,26 +117,6 @@ class TemplateService {
         const cacheKey = this.normalizeTemplateId(templateId);
         this.templateThemeCache.delete(cacheKey);
         this.templateThemeRequests.delete(cacheKey);
-    }
-
-    static async getCustomTemplateSummaries() {
-        try {
-            const response = await fetch(getApiUrl(`/api/v1/ppt/template/all?page_size=100&default=false`),);
-            return await ApiResponseHandler.handleResponse(response, "Failed to get custom template summaries");
-        } catch (error) {
-            console.error("Failed to get custom template summaries", error);
-            throw error;
-        }
-    }
-
-    static async getCustomTemplateDetails(templateId: string) {
-        try {
-            const response = await fetch(getApiUrl(`/api/v1/ppt/template/${templateId}/layouts`),);
-            return await ApiResponseHandler.handleResponse(response, "Failed to get custom template details");
-        } catch (error) {
-            console.error("Failed to get custom template details", error);
-            throw error;
-        }
     }
 
     static async getTemplateSummaries(
@@ -207,6 +168,16 @@ class TemplateService {
                     ),
                     { headers: getHeader() },
                 );
+                if (response.status === 404) {
+                    // Older decks can outlive their source template. Use the
+                    // presentation's stored theme (or the default) without
+                    // repeatedly requesting an unavailable optional theme.
+                    this.templateThemeCache.set(cacheKey, {
+                        expiresAt: Date.now() + TEMPLATE_THEME_CACHE_TTL_MS,
+                        value: null,
+                    });
+                    return null;
+                }
                 if (!response.ok) {
                     throw new Error(`Template theme request failed (${response.status})`);
                 }
@@ -326,31 +297,6 @@ class TemplateService {
         }
     }
 
-    static async updateTemplateLayouts(
-        templateId: string,
-        payload: UpdateTemplateLayoutsPayload,
-    ) {
-        try {
-            const response = await fetch(
-                getApiUrl(`/api/v1/ppt/template/${encodeURIComponent(templateId)}/layouts`),
-                {
-                    method: "PATCH",
-                    headers: getHeader(),
-                    body: JSON.stringify(payload),
-                },
-            );
-            const result = await ApiResponseHandler.handleResponse(
-                response,
-                "Failed to update template layouts",
-            );
-            this.invalidateTemplateTheme(templateId);
-            return result;
-        } catch (error) {
-            console.error("Failed to update template layouts", error);
-            throw error;
-        }
-    }
-
     static async createTemplateLayout(payload: CreateTemplateLayoutPayload) {
         try {
             const response = await fetch(
@@ -393,44 +339,6 @@ class TemplateService {
             return result;
         } catch (error) {
             console.error("Failed to generate template layout", error);
-            throw error;
-        }
-    }
-
-    static async deleteCustomTemplate(presentationId: string) {
-        try {
-            const response = await fetch(getApiUrl(`/api/v1/ppt/template-management/delete-templates/${presentationId}`), { method: "DELETE", headers: getHeader() });
-            return await ApiResponseHandler.handleResponseWithResult(response, "Failed to delete custom template");
-        } catch (error) {
-            console.error("Failed to delete custom template", error);
-            throw error;
-        }
-    }
-
-    static async cloneCustomTemplate(payload: CloneTemplatePayload) {
-        try {
-            const response = await fetch(getApiUrl(`/api/v1/ppt/template/clone`), {
-                method: "POST",
-                headers: getHeader(),
-                body: JSON.stringify(payload),
-            });
-            return await ApiResponseHandler.handleResponse(response, "Failed to clone template");
-        } catch (error) {
-            console.error("Failed to clone template", error);
-            throw error;
-        }
-    }
-
-    static async cloneTemplateLayout(payload: CloneLayoutPayload) {
-        try {
-            const response = await fetch(getApiUrl(`/api/v1/ppt/template/slide-layout/clone`), {
-                method: "POST",
-                headers: getHeader(),
-                body: JSON.stringify(payload),
-            });
-            return await ApiResponseHandler.handleResponse(response, "Failed to clone layout");
-        } catch (error) {
-            console.error("Failed to clone layout", error);
             throw error;
         }
     }

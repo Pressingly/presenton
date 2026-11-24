@@ -33,10 +33,6 @@ import { useDispatch, useSelector } from "react-redux";
 import MarkdownRenderer from "@/components/MarkDownRender";
 import { ImagesApi } from "../../services/api/images";
 import { PresentationGenerationApi } from "../../services/api/presentation-generation";
-import {
-  PRESENTON_BLANK_SLIDE_PROMPT_EVENT,
-  type BlankSlidePromptEventDetail,
-} from "../../_shared/blank-slide-prompt-event";
 import type {
   ChatConversationSummary,
   ChatHistoryMessage,
@@ -496,6 +492,8 @@ const Chat = ({
   onAgentSlideFocus,
   onChatSendingStateChange,
   onFollowModeChange,
+  blankSlidePromptRequest,
+  onBlankSlidePromptConsumed,
 }: ChatProps) => {
   const dispatch = useDispatch<AppDispatch>();
   const llmConfig = useSelector(
@@ -520,6 +518,7 @@ const Chat = ({
     string | null
   >(null);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [hasLoadedInitialHistory, setHasLoadedInitialHistory] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isFollowAgentEnabled, setIsFollowAgentEnabled] = useState(true);
   const [hasChatMutationStarted, setHasChatMutationStarted] = useState(false);
@@ -550,6 +549,7 @@ const Chat = ({
   >(null);
 
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const suggestedPromptsRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -558,6 +558,7 @@ const Chat = ({
   >(
     async () => undefined,
   );
+  const handledBlankPromptRequestId = useRef<number | null>(null);
   const lastFollowedTraceRef = useRef<string | null>(null);
   const focusEventSequenceRef = useRef(0);
   const activeFocusedSlideRef = useRef<number | null>(null);
@@ -576,6 +577,33 @@ const Chat = ({
     changeCount: number;
   } | null>(null);
   const activeResourceId = resourceId ?? presentationId;
+
+  useEffect(() => {
+    const row = suggestedPromptsRef.current;
+    if (!row) return;
+
+    const handleWheel = (event: WheelEvent) => {
+      if (
+        event.defaultPrevented || event.ctrlKey || event.metaKey ||
+        Math.abs(event.deltaY) <= Math.abs(event.deltaX)
+      ) return;
+
+      const multiplier = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? 16
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? row.clientWidth : 1;
+      const nextLeft = Math.min(
+        Math.max(row.scrollLeft + event.deltaY * multiplier, 0),
+        row.scrollWidth - row.clientWidth,
+      );
+      if (nextLeft === row.scrollLeft || nextLeft < 0) return;
+
+      event.preventDefault();
+      row.scrollLeft = nextLeft;
+    };
+
+    row.addEventListener("wheel", handleWheel, { passive: false });
+    return () => row.removeEventListener("wheel", handleWheel);
+  }, [useEditorLayout, variant]);
 
   const baseAnalyticsProps = useCallback(
     () => ({
@@ -597,6 +625,7 @@ const Chat = ({
 
   useEffect(() => {
     let cancelled = false;
+    setHasLoadedInitialHistory(false);
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     setMessages([]);
@@ -772,6 +801,7 @@ const Chat = ({
       } finally {
         if (!cancelled) {
           setIsHistoryLoading(false);
+          setHasLoadedInitialHistory(true);
         }
       }
     };
@@ -974,7 +1004,7 @@ const Chat = ({
     }
     if (variant === "template-v2") {
       contextLines.push(
-        "UI context: the user is editing a rendered TemplateV2 presentation with the v2 assistant. Use getTemplateSummary, getAvailableLayouts, getAvailableBlocks, searchSlide, getSlideAtIndex, getContentSchemaFromLayoutId, addNewSlide, addNewSlideLayout, saveSlide, updateSlide, deleteSlide, addElement, updateElement, deleteElement, addComponent, createComponent, updateComponent, deleteComponent, getPresentationTheme, setPresentationTheme, readSourceDocuments, and generateAssets. For visible edits inside an existing slide, inspect with getSlideAtIndex and use the returned componentId/elementPath exactly. Use updateElement for element toolbar-style properties and updateComponent for component move, resize, duplicate, layer order, group, and ungroup actions. When adding or creating rendered elements/components, prefer reusable template blocks over primitives: for custom new slides, search getAvailableBlocks for a title/header text block first, then requested chart/table/content blocks, adapt their component JSON, and include the final requested content instead of placeholder blocks. Keep new rendered elements/components strictly inside the 1280x720 visible slide window."
+        "UI context: the user is editing a rendered TemplateV2 presentation with the v2 assistant. Use getTemplateSummary, getAvailableLayouts, getAvailableBlocks, searchSlide, getSlideAtIndex, getContentSchemaFromLayoutId, addNewSlide, addNewSlideLayout, saveSlide, updateSlide, deleteSlide, addElement, updateElement, deleteElement, addComponent, createComponent, updateComponent, deleteComponent, readSourceDocuments, and generateAssets. For visible edits inside an existing slide, inspect with getSlideAtIndex and use the returned componentId/elementPath exactly. Use updateElement for element toolbar-style properties and updateComponent for component move, resize, duplicate, layer order, group, and ungroup actions. When adding or creating rendered elements/components, prefer reusable template blocks over primitives: for custom new slides, search getAvailableBlocks for a title/header text block first, then requested chart/table/content blocks, adapt their component JSON, and include the final requested content instead of placeholder blocks. Keep new rendered elements/components strictly inside the 1280x720 visible slide window."
       );
     }
     if (presentationType === "smart" && variant === "presentation") {
@@ -1985,52 +2015,59 @@ const Chat = ({
   });
 
   useEffect(() => {
-    if (variant !== "template-v2" || typeof window === "undefined") return;
+    if (
+      variant !== "template-v2" ||
+      !blankSlidePromptRequest ||
+      !hasLoadedInitialHistory ||
+      chatInputDisabled ||
+      isUploadingPastedImage ||
+      !activeResourceId ||
+      handledBlankPromptRequestId.current === blankSlidePromptRequest.id
+    ) {
+      return;
+    }
 
-    const handleBlankSlidePrompt = (event: Event) => {
-      const detail = (event as CustomEvent<BlankSlidePromptEventDetail>).detail;
-      const prompt = typeof detail?.prompt === "string" ? detail.prompt.trim() : "";
-      if (!prompt) return;
+    handledBlankPromptRequestId.current = blankSlidePromptRequest.id;
+    onBlankSlidePromptConsumed?.(blankSlidePromptRequest.id);
+    const detail = blankSlidePromptRequest.detail;
+    const prompt = typeof detail.prompt === "string" ? detail.prompt.trim() : "";
+    if (!prompt) return;
 
-      const target =
-        typeof detail.slideIndex === "number"
-          ? `slide ${detail.slideIndex + 1}`
-          : "the current blank slide";
-      const layoutReference =
-        typeof detail.layoutId === "string" && detail.layoutId.trim()
-          ? ` (layout id: ${detail.layoutId.trim()})`
-          : "";
-      const instruction =
-        detail.promptKind === "layout"
-          ? `Fill the existing selected ${target} using its selected layout${layoutReference} as the layout reference. Preserve the layout structure and update this slide; do not add another slide.`
-          : `Create content on the existing selected ${target}. Update this slide; do not add another slide.`;
-      if (typeof detail.slideIndex === "number") {
-        setHiddenOverlaySlideReference(detail.slideIndex);
-      }
-      void submitMessageRef.current(prompt, {
-        backendContext: instruction,
-        layoutPreview:
-          detail.promptKind === "layout" && detail.layout
-            ? {
-              layout: detail.layout,
-              layoutId: detail.layoutId,
-              slideIndex: detail.slideIndex,
-            }
-            : undefined,
-      });
-    };
-
-    window.addEventListener(
-      PRESENTON_BLANK_SLIDE_PROMPT_EVENT,
-      handleBlankSlidePrompt,
-    );
-    return () => {
-      window.removeEventListener(
-        PRESENTON_BLANK_SLIDE_PROMPT_EVENT,
-        handleBlankSlidePrompt,
-      );
-    };
-  }, [variant]);
+    const target =
+      typeof detail.slideIndex === "number"
+        ? `slide ${detail.slideIndex + 1}`
+        : "the current blank slide";
+    const layoutReference =
+      typeof detail.layoutId === "string" && detail.layoutId.trim()
+        ? ` (layout id: ${detail.layoutId.trim()})`
+        : "";
+    const instruction =
+      detail.promptKind === "layout"
+        ? `Fill the existing selected ${target} using its selected layout${layoutReference} as the layout reference. Preserve the layout structure and update this slide; do not add another slide.`
+        : `Create content on the existing selected ${target}. Update this slide; do not add another slide.`;
+    if (typeof detail.slideIndex === "number") {
+      setHiddenOverlaySlideReference(detail.slideIndex);
+    }
+    void submitMessageRef.current(prompt, {
+      backendContext: instruction,
+      layoutPreview:
+        detail.promptKind === "layout" && detail.layout
+          ? {
+            layout: detail.layout,
+            layoutId: detail.layoutId,
+            slideIndex: detail.slideIndex,
+          }
+          : undefined,
+    });
+  }, [
+    activeResourceId,
+    blankSlidePromptRequest,
+    chatInputDisabled,
+    hasLoadedInitialHistory,
+    isUploadingPastedImage,
+    onBlankSlidePromptConsumed,
+    variant,
+  ]);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -2762,7 +2799,12 @@ const Chat = ({
             </div>
           </form>
 
-          <div className="flex h-[28px] w-full gap-2 overflow-hidden">
+          <div
+            ref={suggestedPromptsRef}
+            role="group"
+            aria-label="Suggested prompts"
+            className="flex min-h-[34px] w-full min-w-0 gap-2 overflow-x-auto overflow-y-hidden px-0.5 py-0.5 [scrollbar-color:#D7D9DF_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[#D7D9DF] [&::-webkit-scrollbar-track]:bg-transparent"
+          >
             {(isOutlineVariant
               ? outlineEditorQuickPrompts
               : editorQuickPrompts
@@ -2771,7 +2813,7 @@ const Chat = ({
                 key={prompt}
                 type="button"
                 onClick={() => applyPrompt(prompt)}
-                className="h-[28px] shrink-0 rounded-full border-[1.345px] border-[#F4F4F4] bg-[#F9FAFB] px-3 font-syne text-xs font-medium leading-5 tracking-[0.16px] text-[#666666] transition-colors hover:border-[#D9D6FE] hover:bg-[#FAFAFF]"
+                className="h-[28px] shrink-0 whitespace-nowrap rounded-full border-[1.345px] border-[#F4F4F4] bg-[#F9FAFB] px-3 font-syne text-xs font-medium leading-5 tracking-[0.16px] text-[#666666] transition-colors hover:border-[#D9D6FE] hover:bg-[#FAFAFF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#7A5AF8]"
               >
                 {prompt}
               </button>

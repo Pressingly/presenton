@@ -41,6 +41,7 @@ from models.presentation_with_slides import (
     PresentationWithSlides,
 )
 from services.documents_loader import DocumentsLoader
+from services.provider_settings import get_provider_settings
 from services.chat.slide_ui_helpers import _normalize_generated_image_fit
 from services.temp_file_service import TEMP_FILE_SERVICE
 from services.webhook_service import WebhookService
@@ -89,6 +90,7 @@ from utils.outline_utils import (
 )
 from utils.outline_limits import normalize_outline_payload
 from utils.process_slides import (
+    image_target_sizes_from_template,
     process_slide_add_placeholder_assets,
     process_slide_and_fetch_assets,
 )
@@ -109,6 +111,7 @@ from models.presentation_layout import PresentationLayoutModel, SlideLayoutModel
 from templates.v2.schema import get_template_schema
 from templates.v2.content import (
     hydrate_repeated_top_level_groups,
+    infographic_markdown_to_plain_text,
     repeated_child_source_index,
 )
 from templates.v2.theme import template_theme_for_presentation
@@ -340,6 +343,16 @@ def _presentation_response_data(presentation: PresentationModel) -> dict:
     data = presentation.model_dump(exclude={"layout", "structure"})
     data["type"] = (
         "smart" if presentation.generation_mode == "smart" else "standard"
+    )
+    # Blank decks have no saved generation setup, even after slide edits.
+    data["can_regenerate"] = (
+        bool(
+            presentation.content.strip()
+            or presentation.file_paths
+            or presentation.community_design_ids
+        )
+        if presentation.generation_mode == "smart"
+        else bool(presentation.outlines and presentation.structure and presentation.layout)
     )
     return data
 
@@ -630,6 +643,12 @@ def _apply_template_content_to_element(
             if name in content_values:
                 has_value = True
                 value = content_values[name]
+            elif len(content_values) == 1:
+                for candidate in _template_content_name_candidates(name)[1:]:
+                    if candidate in content_values:
+                        has_value = True
+                        value = content_values[candidate]
+                        break
         else:
             if preferred_content_keys is None and name_occurrences is not None:
                 preferred_content_keys = _template_repeated_content_keys_for_name(
@@ -872,8 +891,8 @@ def _apply_template_infographic_content(
     data = value.get("data")
     if isinstance(data, dict):
         current_data = updated.get("data")
+        incoming_data = infographic_markdown_to_plain_text(data)
         if isinstance(current_data, dict):
-            incoming_data = copy.deepcopy(data)
             current_type = current_data.get("type")
             if isinstance(current_type, str):
                 incoming_data["type"] = current_type
@@ -882,7 +901,7 @@ def _apply_template_infographic_content(
                 **incoming_data,
             }
         else:
-            updated["data"] = copy.deepcopy(data)
+            updated["data"] = incoming_data
 
     colors = value.get("colors")
     if isinstance(colors, list) and colors:
@@ -1451,6 +1470,14 @@ async def _resolve_prepare_layout(
 
 
 def build_export_cookie_header(request: Request) -> Optional[str]:
+    from api.v1.auth.desktop import desktop_cookie_header
+
+    desktop_cookie = desktop_cookie_header()
+    if desktop_cookie:
+        # Header-authenticated renderer/background calls need credentials in
+        # the isolated export browser too; account JWT cookies are preserved.
+        cookie = (request.headers.get("cookie") or "").strip()
+        return f"{cookie}; {desktop_cookie}" if cookie else desktop_cookie
     cookie_header = (request.headers.get("cookie") or "").strip()
     if cookie_header:
         return cookie_header
@@ -1582,6 +1609,33 @@ async def duplicate_presentation(
         **_presentation_response_data(new_presentation),
         slides=new_slides,
     )
+
+
+@PRESENTATION_ROUTER.post("/{id}/regenerate", status_code=204)
+async def regenerate_smart_presentation(
+    id: uuid.UUID, sql_session: AsyncSession = Depends(get_async_session)
+):
+    presentation = await sql_session.get(PresentationModel, id)
+    if not presentation:
+        raise HTTPException(404, "Presentation not found")
+    settings = await get_provider_settings(sql_session)
+    if settings.get("LLM") == "presenton":
+        raise HTTPException(400, "Presenton Cloud does not support regeneration")
+    if (
+        presentation.generation_mode != "smart"
+        or not _presentation_response_data(presentation)["can_regenerate"]
+    ):
+        raise HTTPException(400, "A generated Smart presentation is required")
+
+    # Reset only on an explicit regeneration request. SSE reconnects must
+    # continue using saved checkpoints instead of restarting generation.
+    await sql_session.execute(
+        delete(SlideModel).where(
+            SlideModel.presentation == id,
+            SlideModel.owner_id == get_current_owner_id(),
+        )
+    )
+    await sql_session.commit()
 
 
 @PRESENTATION_ROUTER.post("/{id}/export", response_model=PresentationPathAndEditPath)
@@ -1731,8 +1785,18 @@ async def create_presentation(
     status_code=201,
 )
 async def create_blank_presentation(
+    template_id: Annotated[Optional[str], Body(embed=True)] = None,
     sql_session: AsyncSession = Depends(get_async_session),
 ):
+    template = None
+    if template_id is not None:
+        template = await _resolve_requested_template(template_id, sql_session)
+        if template is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Template not found. Please use a valid template.",
+            )
+
     presentation_id = uuid.uuid4()
     presentation = PresentationModel(
         id=presentation_id,
@@ -1742,12 +1806,12 @@ async def create_blank_presentation(
         language="English",
         title="Untitled Presentation",
         layout=None,
-        fonts=None,
+        fonts=_extract_template_fonts_from_assets(template.assets) if template else None,
         include_title_slide=False,
     )
     slide = SlideModel(
         presentation=presentation_id,
-        layout_group=BLANK_PRESENTATION_LAYOUT_GROUP,
+        layout_group=template.id if template else BLANK_PRESENTATION_LAYOUT_GROUP,
         layout=BLANK_PRESENTATION_LAYOUT_ID,
         index=0,
         content={},
@@ -2329,6 +2393,9 @@ async def stream_presentation(
             # This will mutate slide and add placeholder assets
             process_slide_add_placeholder_assets(slide)
             slide.ui = _apply_template_content_to_ui(slide.ui, slide.content)
+            image_target_sizes = image_target_sizes_from_template(
+                slide.ui, slide.content, _apply_template_content_to_ui
+            )
 
             # This will mutate slide - start task immediately so it runs in parallel with next slide LLM generation
             asset_warnings_by_slide[i] = []
@@ -2344,6 +2411,7 @@ async def stream_presentation(
                     icon_weight=icon_weight,
                     allow_image_fallback=True,
                     image_warnings=asset_warnings_by_slide[i],
+                    image_target_sizes=image_target_sizes,
                 )
             )
             async_assets_generation_tasks.append(asset_task)
@@ -2460,7 +2528,6 @@ async def update_presentation(
     id: Annotated[uuid.UUID, Body()],
     n_slides: Annotated[Optional[int], Body()] = None,
     title: Annotated[Optional[str], Body()] = None,
-    theme: Annotated[Optional[dict], Body()] = None,
     slides: Annotated[Optional[List[SlideModel]], Body()] = None,
     sql_session: AsyncSession = Depends(get_async_session),
 ):
@@ -2483,8 +2550,6 @@ async def update_presentation(
         presentation_update_dict["n_slides"] = n_slides
     if title:
         presentation_update_dict["title"] = title
-    if theme or theme is None:
-        presentation_update_dict["theme"] = theme
 
     if presentation_update_dict:
         presentation.sqlmodel_update(presentation_update_dict)
@@ -2983,6 +3048,9 @@ async def generate_presentation_handler(
                         icon_weight=layout_model.icon_weight,
                         allow_image_fallback=True,
                         image_warnings=image_warnings,
+                        image_target_sizes=image_target_sizes_from_template(
+                            slide.ui, slide.content, _apply_template_content_to_ui
+                        ),
                     )
                 )
                 for offset, slide in enumerate(batch_slides)
@@ -3221,9 +3289,11 @@ async def check_async_presentation_generation_status(
         raise HTTPException(
             status_code=404, detail="No presentation generation task found"
         )
-    response = status.model_copy(deep=True)
-    if response.data:
-        response.data = absolute_mcp_result_links(request, response.data)
+    # Return the row's field values as a plain dict (no SQLAlchemy instance
+    # state), like check_async_task_status; response_model still validates it.
+    response = status.model_dump()
+    if response.get("data"):
+        response["data"] = absolute_mcp_result_links(request, response["data"])
     return response
 
 

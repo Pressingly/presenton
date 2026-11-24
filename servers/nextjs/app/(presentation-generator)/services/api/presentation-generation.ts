@@ -21,6 +21,14 @@ export type BlankPresentationResponse = {
 };
 
 export class PresentationGenerationApi {
+  static async regenerateSmartPresentation(id: string): Promise<void> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/ppt/presentation/${id}/regenerate`),
+      { method: "POST", headers: getHeader() }
+    );
+    await ApiResponseHandler.handleResponse(response, "Failed to regenerate presentation");
+  }
+
   static async uploadDoc(documents: File[]) {
     const formData = new FormData();
 
@@ -143,13 +151,18 @@ export class PresentationGenerationApi {
     }
   }
 
-  static async createBlankPresentation(): Promise<BlankPresentationResponse> {
+  static async createBlankPresentation(
+    templateId?: string
+  ): Promise<BlankPresentationResponse> {
     try {
       const response = await fetch(
         getApiUrl(`/api/v1/ppt/presentation/create/blank`),
         {
           method: "POST",
           headers: getHeader(),
+          body: templateId
+            ? JSON.stringify({ template_id: templateId })
+            : undefined,
           cache: "no-cache",
         }
       );
@@ -165,31 +178,6 @@ export class PresentationGenerationApi {
       return presentation;
     } catch (error) {
       console.error("error in blank presentation creation", error);
-      throw error;
-    }
-  }
-
-  static async editSlide(
-    slide_id: string,
-    prompt: string
-  ) {
-    try {
-      const response = await fetch(
-        getApiUrl(`/api/v1/ppt/slide/edit`),
-        {
-          method: "POST",
-          headers: getHeader(),
-          body: JSON.stringify({
-            id: slide_id,
-            prompt,
-          }),
-          cache: "no-cache",
-        }
-      );
-
-      return await ApiResponseHandler.handleResponse(response, "Failed to update slide");
-    } catch (error) {
-      console.error("error in slide update", error);
       throw error;
     }
   }
@@ -306,8 +294,13 @@ export class PresentationGenerationApi {
 
   static async generateImage(imageGenerate: ImageGenerate) {
     try {
+      const params = new URLSearchParams({ prompt: imageGenerate.prompt });
+      if (imageGenerate.width && imageGenerate.height) {
+        params.set("width", String(imageGenerate.width));
+        params.set("height", String(imageGenerate.height));
+      }
       const response = await fetch(
-        getApiUrl(`/api/v1/ppt/images/generate?prompt=${imageGenerate.prompt}`),
+        getApiUrl(`/api/v1/ppt/images/generate?${params.toString()}`),
         {
           method: "GET",
           headers: getHeader(),
