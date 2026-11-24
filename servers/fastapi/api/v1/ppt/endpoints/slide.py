@@ -15,7 +15,16 @@ from utils.asset_directory_utils import get_images_directory
 from utils.llm_calls.edit_slide import get_edited_slide_content
 from utils.llm_calls.edit_slide_html import get_edited_slide_html
 from utils.llm_calls.select_slide_type_on_edit import get_slide_layout_from_prompt
-from utils.process_slides import process_old_and_new_slides_and_fetch_assets
+from utils.process_slides import (
+    image_target_sizes_from_template,
+    process_old_and_new_slides_and_fetch_assets,
+)
+from api.v1.ppt.endpoints.presentation import (
+    _apply_template_content_to_ui,
+    _get_presentation_stream_layout,
+    _hydrate_template_slide_ui,
+    _template_slide_ui,
+)
 
 
 SLIDE_ROUTER = APIRouter(prefix="/slide", tags=["Slide"])
@@ -44,7 +53,7 @@ async def edit_slide(
         prompt,
     )
 
-    presentation_layout = presentation.get_layout()
+    presentation_layout = _get_presentation_stream_layout(presentation)
     slide_layout = await get_slide_layout_from_prompt(
         prompt,
         presentation_layout,
@@ -71,13 +80,23 @@ async def edit_slide(
         image_generation_service,
         slide.content,
         edited_slide_content,
-        icon_weight=presentation.get_layout().icon_weight,
+        icon_weight=presentation_layout.icon_weight,
         use_template_asset_fields=(
             _is_template_layout_payload(presentation.layout)
             or isinstance(slide.ui, dict)
         ),
         allow_image_fallback=True,
         image_warnings=image_warnings,
+        old_image_target_sizes=image_target_sizes_from_template(
+            _template_slide_ui(presentation.layout, slide.layout) or slide.ui,
+            slide.content,
+            _apply_template_content_to_ui,
+        ),
+        new_image_target_sizes=image_target_sizes_from_template(
+            _template_slide_ui(presentation.layout, slide_layout.id),
+            edited_slide_content,
+            _apply_template_content_to_ui,
+        ),
     )
     for warning in image_warnings:
         LOGGER.warning(
@@ -92,7 +111,13 @@ async def edit_slide(
 
     sql_session.add(slide)
     slide.content = edited_slide_content
+    if (
+        slide.layout != slide_layout.id
+        and _is_template_layout_payload(presentation.layout)
+    ):
+        slide.ui = _template_slide_ui(presentation.layout, slide_layout.id)
     slide.layout = slide_layout.id
+    _hydrate_template_slide_ui(slide, presentation.layout)
     slide.speaker_note = edited_slide_content.get("__speaker_note__", "")
     sql_session.add_all(new_assets)
     await sql_session.commit()

@@ -14,10 +14,6 @@ def _is_truthy(value: str | None) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def get_can_change_keys_env():
-    return os.getenv("CAN_CHANGE_KEYS")
-
-
 def get_presenton_public_url() -> str | None:
     value = (os.getenv("PRESENTON_PUBLIC_URL") or "").strip().rstrip("/")
     if value.startswith(("http://", "https://")):
@@ -406,9 +402,14 @@ def get_comfyui_workflow_env():
     return os.getenv("COMFYUI_WORKFLOW")
 
 
-# Dalle 3 Quality
-def get_dall_e_3_quality_env():
-    return os.getenv("DALL_E_3_QUALITY")
+# GPT Image 2 Quality
+def get_gpt_image_2_quality_env():
+    quality = os.getenv("GPT_IMAGE_2_QUALITY")
+    if quality:
+        return quality
+    if os.getenv("IMAGE_PROVIDER") == "dall-e-3":
+        return "high" if os.getenv("DALL_E_3_QUALITY") == "hd" else "medium"
+    return None
 
 
 # Gpt Image 1.5 Quality

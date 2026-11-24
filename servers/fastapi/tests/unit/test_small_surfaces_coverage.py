@@ -27,7 +27,6 @@ from models.sse_response import (
 from services.chat.conversation_store import ChatConversationStore
 from services.concurrent_service import ConcurrentService
 from services.export_task_service import EXPORT_TASK_SERVICE
-from templates import get_layout_by_name as tpl_layout_fetcher
 from templates.presentation_layout import PresentationLayoutModel, SlideLayoutModel
 from utils import ocr_language
 from utils.datetime_utils import get_current_utc_datetime
@@ -46,7 +45,7 @@ from utils.get_dynamic_models import (
 from utils.image_provider import (
     get_selected_image_provider,
     is_comfyui_selected,
-    is_dalle3_selected,
+    is_gpt_image_2_selected,
     is_gemini_flash_selected,
     is_gpt_image_1_5_selected,
     is_image_generation_disabled,
@@ -65,7 +64,7 @@ _ALL_IMAGE_PROVIDER_PREDICATES = (
     is_pixabay_selected,
     is_gemini_flash_selected,
     is_nanobanana_pro_selected,
-    is_dalle3_selected,
+    is_gpt_image_2_selected,
     is_gpt_image_1_5_selected,
     is_comfyui_selected,
     is_open_webui_selected,
@@ -366,7 +365,7 @@ def test_get_writable_path_app_data_fallback(monkeypatch, tmp_path):
         ("pixabay", is_pixabay_selected),
         ("gemini_flash", is_gemini_flash_selected),
         ("nanobanana_pro", is_nanobanana_pro_selected),
-        ("dall-e-3", is_dalle3_selected),
+        ("gpt-image-2", is_gpt_image_2_selected),
         ("gpt-image-1.5", is_gpt_image_1_5_selected),
         ("comfyui", is_comfyui_selected),
         ("open_webui", is_open_webui_selected),
@@ -615,95 +614,6 @@ def test_presentation_layout_model_surface():
     assert layout.get_slide_layout_index("sid") == 0
     with pytest.raises(HTTPException):
         layout.get_slide_layout_index("missing")
-
-
-def _make_aio_layout_session(resp: AsyncMock):
-    sess = MagicMock()
-    getter = MagicMock()
-    getter.__aenter__ = AsyncMock(return_value=resp)
-    getter.__aexit__ = AsyncMock(return_value=None)
-    sess.get = MagicMock(return_value=getter)
-    sess.__aenter__ = AsyncMock(return_value=sess)
-    sess.__aexit__ = AsyncMock(return_value=None)
-    return sess
-
-
-def test_get_layout_by_name_returns_model():
-    resp = AsyncMock()
-    resp.status = 200
-    resp.json = AsyncMock(
-        return_value={
-            "name": "grp",
-            "ordered": False,
-            "slides": [{"id": "layout", "json_schema": {"title": "t"}}],
-        }
-    )
-
-    async def runner():
-        with patch(
-            "templates.get_layout_by_name.aiohttp.ClientSession",
-            return_value=_make_aio_layout_session(resp),
-        ):
-            layout = await tpl_layout_fetcher.get_layout_by_name("deck")
-            assert isinstance(layout, PresentationLayoutModel)
-
-    asyncio.run(runner())
-
-
-def test_get_layout_by_name_raises_on_http_failure():
-    resp = AsyncMock()
-    resp.status = 500
-    resp.text = AsyncMock(return_value="down")
-
-    async def runner():
-        with patch(
-            "templates.get_layout_by_name.aiohttp.ClientSession",
-            return_value=_make_aio_layout_session(resp),
-        ):
-            with pytest.raises(HTTPException):
-                await tpl_layout_fetcher.get_layout_by_name("missing")
-
-    asyncio.run(runner())
-
-
-def test_get_layout_by_name_does_not_attach_obsolete_auth_cookie():
-    resp = AsyncMock()
-    resp.status = 200
-    resp.json = AsyncMock(
-        return_value={
-            "name": "grp",
-            "ordered": False,
-            "slides": [{"id": "layout", "json_schema": {"title": "t"}}],
-        }
-    )
-
-    captured: dict[str, str | None] = {}
-
-    def capture_session(*_a, **_k):
-        sess = MagicMock()
-
-        def _get(url, *, headers=None, **_kw):
-            captured.update(headers or {})
-            inner = MagicMock()
-            inner.__aenter__ = AsyncMock(return_value=resp)
-            inner.__aexit__ = AsyncMock(return_value=None)
-            return inner
-
-        sess.get = MagicMock(side_effect=_get)
-        sess.__aenter__ = AsyncMock(return_value=sess)
-        sess.__aexit__ = AsyncMock(return_value=None)
-        return sess
-
-    async def runner():
-        with patch(
-            "templates.get_layout_by_name.aiohttp.ClientSession",
-            side_effect=capture_session,
-        ):
-            layout = await tpl_layout_fetcher.get_layout_by_name("deck")
-            assert isinstance(layout, PresentationLayoutModel)
-
-    asyncio.run(runner())
-    assert "Cookie" not in captured
 
 
 @pytest.mark.parametrize(

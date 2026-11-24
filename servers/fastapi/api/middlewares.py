@@ -4,6 +4,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from api.v1.auth.assets import is_app_data_path_authorized
+from api.v1.auth.desktop import desktop_request_denied
 from api.v1.auth.context import (
     reset_current_owner_id,
     reset_current_owner_is_admin,
@@ -15,14 +16,13 @@ from api.v1.auth.users import get_jwt_strategy
 from models.sql.user import User
 from services.database import async_session_maker
 from services.presenton_cloud_proxy import maybe_proxy_presenton_cloud_request
-from utils.get_env import get_can_change_keys_env, is_disable_auth_enabled
+from utils.get_env import is_disable_auth_enabled
 from utils.user_config import update_env_with_user_config
 
 
 class UserConfigEnvUpdateMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        if get_can_change_keys_env() != "false":
-            update_env_with_user_config()
+        update_env_with_user_config()
         return await call_next(request)
 
 
@@ -53,6 +53,9 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
         return path in self._PROTECTED_NON_API_PATHS
 
     async def dispatch(self, request: Request, call_next):
+        denied = desktop_request_denied(request)
+        if denied is not None:
+            return denied
         if is_disable_auth_enabled():
             # Electron uses the auth-disabled, single-user runtime. It still
             # needs the Presenton Cloud provider proxy when that provider is
